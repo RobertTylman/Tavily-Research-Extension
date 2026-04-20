@@ -6,7 +6,11 @@
     "scripts": {
         "dev": "npm run dev --prefix extension",
         "build": "npm run build --prefix extension",
-        "install:extension": "npm install --prefix extension"
+        "install:extension": "npm install --prefix extension",
+        "typecheck": "npm run typecheck --prefix extension",
+        "lint": "npm run lint --prefix extension",
+        "test": "npm run test --prefix extension",
+        "format": "npm run format --prefix extension"
     },
     "keywords": [
         "chrome-extension",

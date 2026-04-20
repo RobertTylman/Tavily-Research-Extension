@@ -20,6 +20,13 @@ A production-quality Chrome extension that extracts verifiable claims from user-
 - **Transparent Verdicts** - Every verdict includes confidence scores, explanations, and cited sources
 - **Dark Mode** - Automatically adapts to your system's color scheme
 - **Data Export** - Export your verification history to JSON for analysis
+- **Hybrid Entailment Layer** - NLI/LLM-first stance classification with a minimal deterministic fallback
+- **On-Device NLI** - Optional `transformers.js` MNLI model in the service worker (no per-call API cost; first run downloads model files)
+- **LLM Entailment Providers** - Optional OpenAI, Anthropic, or local Ollama stance classification
+- **Automated Tests** - Vitest coverage for claim extraction, verifier logic, verdict thresholds, and Tavily request handling
+- **Lint + Format Tooling** - ESLint and Prettier integrated into local scripts and pre-commit hooks
+- **Cross-Platform Build** - Postbuild asset copy now uses a Node script (`fs.cp`) instead of shell-specific `cp`
+- **CI Pipeline** - GitHub Actions runs typecheck, lint, tests, and build on every push/PR
 
 ## Architecture
 
@@ -34,6 +41,7 @@ extension/
 │   │   ├── claimExtractor.ts
 │   │   ├── tavily.ts
 │   │   ├── verifier.ts
+│   │   ├── entailment.ts
 │   │   └── verdictEngine.ts
 │   └── utils/             # Helpers (messaging, rate limiting, cache)
 ├── public/
@@ -66,6 +74,7 @@ extension/
 
 - Node.js 18+
 - A Tavily API key (free tier available)
+- Optional: OpenAI/Anthropic API key or local Ollama for LLM entailment mode
 
 ### Installation
 
@@ -94,6 +103,8 @@ extension/
 5. Configure API Key:
    - Click the extension icon or use `Cmd+Shift+F`
    - Enter your Tavily API key in settings
+   - (Optional) Choose entailment provider: `On-device NLI` (default), `LLM`, or `Regex`
+   - If using `LLM`, set provider (`OpenAI`, `Anthropic`, or `Ollama`) and model/key in settings
    - Your key is stored locally and never sent to external servers
 
 ### Development
@@ -103,10 +114,19 @@ Run in watch mode for development:
 npm run dev
 ```
 
+Quality commands:
+```bash
+npm run typecheck
+npm run lint
+npm run test
+npm run build
+```
+
 ## Security Model
 
 - **API keys never touch client-side code** - All Tavily API calls go through the background service worker
-- **Local storage only** - API keys are stored in `chrome.storage.local` with encryption at rest
+- **Local storage only** - Tavily key and entailment settings/LLM key are stored in `chrome.storage.local` on the user's machine
+- **Per-source entailment cache** - Entailment outputs are cached by `(claim, url)` to reduce repeated inference calls
 - **Rate limiting** - 10 requests per minute to protect API quota
 - **No external tracking** - No analytics or telemetry
 
@@ -118,7 +138,7 @@ This extension is built with trust and transparency as core values:
 2. **Epistemic Humility** - Confidence is capped at 90%; we prefer "Insufficient Evidence" over guessing
 3. **Conservative Thresholds** - Strong consensus required for definitive verdicts
 4. **Authority Weighting** - Government, academic, and fact-check sources weighted higher
-5. **Deterministic Outputs** - Heuristic-based classification for reproducible results
+5. **Entailment-First Stance** - Semantic stance is classified by NLI/LLM with conservative deterministic fallback
 
 ## Verification Pipeline
 
@@ -131,10 +151,11 @@ graph LR
     D -->|No| F[Skip Verification]
     E -->|Hit| G[Return Cached Verdict]
     E -->|Miss| H[Multi-Query Search]
-    H --> I[Evidence Aggregation]
-    I --> J[Source Analysis]
-    J --> K[Verdict Generation]
-    K --> L[Cache & Display Results]
+    H --> I[Entailment Classification<br/>On-device NLI or LLM]
+    I --> J[Evidence Aggregation]
+    J --> K[Source Analysis]
+    K --> L[Verdict Generation]
+    L --> M[Cache & Display Results]
 ```
 
 ## API Reference
@@ -154,9 +175,11 @@ const factual = getFactualClaims(claims);
 ### Evidence Classification
 
 ```typescript
-import { processSearchResults, aggregateEvidence } from './lib/verifier';
+import { processSearchResults } from './lib/verifier';
+import { buildEntailmentOverrides } from './lib/entailment';
 
-const evidence = processSearchResults(claim, searchResults);
+const overrides = await buildEntailmentOverrides(claim, searchResults, settings);
+const evidence = processSearchResults(claim, searchResults, overrides);
 // Returns AggregatedEvidence with supporting/contradicting/inconclusive arrays
 ```
 
@@ -171,7 +194,19 @@ const verdict = generateVerdict(claim, evidence);
 
 ## Testing
 
-Test with sample claims:
+Run the automated suite:
+
+```bash
+npm run test
+```
+
+The suite currently covers:
+- claim extraction behavior and classification boundaries
+- evidence stance/authority/aggregation logic
+- verdict threshold boundaries (`0.59` vs `0.60`, etc.)
+- Tavily request shape, deduplication, and error handling
+
+Manual smoke tests with sample claims:
 
 ✅ **True claims:**
 - "The Great Wall of China is over 13,000 miles long"

@@ -1,6 +1,6 @@
 /**
  * Core type definitions for the Fact-Checking Extension
- * 
+ *
  * These types define the data structures used throughout the verification pipeline:
  * Text → Claims → Evidence → Verdicts
  */
@@ -22,14 +22,14 @@ export type ClaimClassification = 'FACTUAL' | 'OPINION' | 'PREDICTION' | 'AMBIGU
  * An atomic claim extracted from user-provided text
  */
 export interface Claim {
-    /** Unique identifier for tracking through the pipeline */
-    id: string;
-    /** Neutrally-phrased, atomic claim text */
-    text: string;
-    /** Original text before rephrasing (for user reference) */
-    originalText: string;
-    /** Classification determining whether verification is appropriate */
-    classification: ClaimClassification;
+  /** Unique identifier for tracking through the pipeline */
+  id: string;
+  /** Neutrally-phrased, atomic claim text */
+  text: string;
+  /** Original text before rephrasing (for user reference) */
+  originalText: string;
+  /** Classification determining whether verification is appropriate */
+  classification: ClaimClassification;
 }
 
 // ============================================================================
@@ -48,36 +48,66 @@ export type EvidenceStance = 'SUPPORTS' | 'CONTRADICTS' | 'INCONCLUSIVE';
  * A single piece of evidence from a search result
  */
 export interface Evidence {
-    /** Name of the source (e.g., "Reuters", "Wikipedia") */
-    source: string;
-    /** URL to the original content */
-    url: string;
-    /** Relevant excerpt from the source */
-    snippet: string;
-    /** Full content if available (for deeper analysis) */
-    rawContent?: string;
-    /** How this evidence relates to the claim */
-    stance: EvidenceStance;
-    /** Authority score 0-1 based on source credibility */
-    authority: number;
-    /** Publication date if available */
-    publishedDate: string | null;
+  /** Result title/headline from the search provider */
+  title?: string;
+  /** Name of the source (e.g., "Reuters", "Wikipedia") */
+  source: string;
+  /** URL to the original content */
+  url: string;
+  /** Relevant excerpt from the source */
+  snippet: string;
+  /** Full content if available (for deeper analysis) */
+  rawContent?: string;
+  /** How this evidence relates to the claim */
+  stance: EvidenceStance;
+  /** Authority score 0-1 based on source credibility */
+  authority: number;
+  /** Publication date if available */
+  publishedDate: string | null;
+  /** Optional one-sentence rationale from entailment provider */
+  reasoning?: string;
+  /** Which entailment provider produced the final stance */
+  entailmentProvider?: string;
+  /** Entailment confidence, if available */
+  entailmentConfidence?: number;
+}
+
+// ============================================================================
+// ENTAILMENT SETTINGS
+// ============================================================================
+
+export type EntailmentProvider = 'regex' | 'on_device_nli' | 'llm';
+export type LlmProvider = 'openai' | 'anthropic' | 'ollama';
+
+export interface EntailmentSettings {
+  provider: EntailmentProvider;
+  llmProvider: LlmProvider;
+  llmApiKey?: string;
+  llmModel?: string;
+  ollamaBaseUrl?: string;
+}
+
+export interface EntailmentResult {
+  stance: EvidenceStance;
+  confidence: number;
+  reasoning: string;
+  provider: string;
 }
 
 /**
  * Aggregated evidence summary for verdict generation
  */
 export interface AggregatedEvidence {
-    /** All evidence classified as supporting */
-    supporting: Evidence[];
-    /** All evidence classified as contradicting */
-    contradicting: Evidence[];
-    /** All inconclusive evidence */
-    inconclusive: Evidence[];
-    /** Overall consensus strength (-1 to 1, negative = contradicting) */
-    consensusScore: number;
-    /** Total number of sources analyzed */
-    totalSources: number;
+  /** All evidence classified as supporting */
+  supporting: Evidence[];
+  /** All evidence classified as contradicting */
+  contradicting: Evidence[];
+  /** All inconclusive evidence */
+  inconclusive: Evidence[];
+  /** Overall consensus strength (-1 to 1, negative = contradicting) */
+  consensusScore: number;
+  /** Total number of sources analyzed */
+  totalSources: number;
 }
 
 // ============================================================================
@@ -97,32 +127,44 @@ export type VerdictLabel = 'SUPPORTED' | 'FALSE' | 'MISLEADING' | 'INSUFFICIENT_
  * A citation for a verdict
  */
 export interface Citation {
-    /** Source name */
-    source: string;
-    /** Direct URL to the source */
-    url: string;
-    /** Relevant quote from the source */
-    snippet: string;
+  /** Optional article headline */
+  title?: string;
+  /** Source name */
+  source: string;
+  /** Direct URL to the source */
+  url: string;
+  /** Relevant quote from the source */
+  snippet: string;
+  /** Publication date, if available */
+  publishedDate?: string | null;
+  /** Authority score carried through for transparency */
+  authority?: number;
+  /** Evidence stance classification for this source */
+  stance?: EvidenceStance;
+  /** Entailment provider used for this source */
+  entailmentProvider?: string;
+  /** Entailment reasoning from provider */
+  reasoning?: string;
 }
 
 /**
  * Final verdict for a claim after verification
  */
 export interface Verdict {
-    /** ID of the claim this verdict applies to */
-    claimId: string;
-    /** The verdict label */
-    verdict: VerdictLabel;
-    /** Confidence score 0-1 (capped at 0.9 for epistemic humility) */
-    confidence: number;
-    /** Human-readable explanation of the verdict */
-    explanation: string;
-    /** Sources used to reach this verdict */
-    citations: Citation[];
-    /** Warnings about the verification (e.g., source diversity issues) */
-    warnings?: string[];
-    /** Explanation of why confidence is at this level */
-    confidenceExplanation?: string;
+  /** ID of the claim this verdict applies to */
+  claimId: string;
+  /** The verdict label */
+  verdict: VerdictLabel;
+  /** Confidence score 0-1 (capped at 0.9 for epistemic humility) */
+  confidence: number;
+  /** Human-readable explanation of the verdict */
+  explanation: string;
+  /** Sources used to reach this verdict */
+  citations: Citation[];
+  /** Warnings about the verification (e.g., source diversity issues) */
+  warnings?: string[];
+  /** Explanation of why confidence is at this level */
+  confidenceExplanation?: string;
 }
 
 // ============================================================================
@@ -133,31 +175,31 @@ export interface Verdict {
  * Tavily search request configuration
  */
 export interface TavilySearchRequest {
-    query: string;
-    search_depth: 'basic' | 'advanced';
-    include_raw_content: boolean;
-    max_results: number;
-    include_answer: boolean;
+  query: string;
+  search_depth: 'basic' | 'advanced';
+  include_raw_content: boolean;
+  max_results: number;
+  include_answer: boolean;
 }
 
 /**
  * Individual result from Tavily search
  */
 export interface TavilySearchResult {
-    title: string;
-    url: string;
-    content: string;
-    raw_content?: string;
-    score: number;
-    published_date?: string;
+  title: string;
+  url: string;
+  content: string;
+  raw_content?: string;
+  score: number;
+  published_date?: string;
 }
 
 /**
  * Tavily search response
  */
 export interface TavilySearchResponse {
-    results: TavilySearchResult[];
-    query: string;
+  results: TavilySearchResult[];
+  query: string;
 }
 
 // ============================================================================
@@ -168,25 +210,27 @@ export interface TavilySearchResponse {
  * Message types for communication between extension components
  */
 export type ExtensionMessage =
-    | { type: 'VERIFY_TEXT'; text: string }
-    | { type: 'VERIFY_SELECTED_TEXT' }
-    | { type: 'GET_SELECTED_TEXT' }
-    | { type: 'SELECTED_TEXT_RESPONSE'; text: string | null }
-    | { type: 'VERIFICATION_STARTED' }
-    | { type: 'VERIFICATION_PROGRESS'; stage: string; progress: number }
-    | { type: 'VERIFICATION_COMPLETE'; claims: Claim[]; verdicts: Verdict[] }
-    | { type: 'VERIFICATION_ERROR'; error: string }
-    | { type: 'SET_API_KEY'; apiKey: string }
-    | { type: 'GET_API_KEY' }
-    | { type: 'API_KEY_RESPONSE'; hasKey: boolean };
+  | { type: 'VERIFY_TEXT'; text: string }
+  | { type: 'VERIFY_SELECTED_TEXT' }
+  | { type: 'GET_SELECTED_TEXT' }
+  | { type: 'SELECTED_TEXT_RESPONSE'; text: string | null }
+  | { type: 'VERIFICATION_STARTED' }
+  | { type: 'VERIFICATION_PROGRESS'; stage: string; progress: number }
+  | { type: 'VERIFICATION_COMPLETE'; claims: Claim[]; verdicts: Verdict[] }
+  | { type: 'VERIFICATION_ERROR'; error: string }
+  | { type: 'SET_API_KEY'; apiKey: string }
+  | { type: 'GET_API_KEY' }
+  | { type: 'API_KEY_RESPONSE'; hasKey: boolean }
+  | { type: 'GET_ENTAILMENT_SETTINGS' }
+  | { type: 'SET_ENTAILMENT_SETTINGS'; settings: EntailmentSettings };
 
 /**
  * Verification pipeline state
  */
 export interface VerificationState {
-    status: 'idle' | 'extracting' | 'searching' | 'analyzing' | 'complete' | 'error';
-    progress: number;
-    claims: Claim[];
-    verdicts: Verdict[];
-    error?: string;
+  status: 'idle' | 'extracting' | 'searching' | 'analyzing' | 'complete' | 'error';
+  progress: number;
+  claims: Claim[];
+  verdicts: Verdict[];
+  error?: string;
 }
