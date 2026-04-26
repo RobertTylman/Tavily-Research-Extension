@@ -93,8 +93,7 @@ extension/
 ### Prerequisites
 
 - Node.js 18+
-- A Tavily API key — sign up at [tavily.com](https://tavily.com); free tier is
-  enough to try the extension
+- A Tavily API key — [tavily.com](https://tavily.com)
 
 ### Install
 
