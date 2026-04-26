@@ -408,9 +408,7 @@ function formatShareText(claims: Claim[], verdicts: Verdict[]): string {
     const verdict = verdicts.find((v) => v.claimId === claim.id);
     if (!verdict) continue;
     lines.push('', `Claim: "${claim.text}"`);
-    lines.push(
-      `Verdict: ${verdict.verdict} (${Math.round(verdict.confidence * 100)}% confidence)`
-    );
+    lines.push(`Verdict: ${verdict.verdict} (${Math.round(verdict.confidence * 100)}% confidence)`);
     if (verdict.summary) {
       lines.push(`Summary: ${verdict.summary}`);
     } else if (verdict.explanation) {

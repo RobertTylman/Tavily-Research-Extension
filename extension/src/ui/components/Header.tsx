@@ -12,8 +12,8 @@ export function Header({ onSettingsClick, showBack, theme, onToggleTheme }: Head
     <header className="header">
       <div className="header-left">
         <div className="logo">
-          <Icons.Logo width={24} height={24} className="logo-icon-svg" />
-          <span className="logo-text">Tavily Fact Checker</span>
+          <img src="/icons/icon48.png" width={24} height={24} alt="Logo" className="logo-icon" />
+          <span className="logo-text">Tavily Research Assistant</span>
         </div>
       </div>
       <div className="header-actions">

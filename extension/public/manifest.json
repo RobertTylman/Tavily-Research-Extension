@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Live Fact-Checking Assistant",
+  "name": "Tavily Research Assistant",
   "version": "1.0.0",
   "description": "Extract and verify factual claims from any text with transparent, cited evidence",
   "permissions": ["activeTab", "contextMenus", "storage"],
@@ -27,7 +27,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Fact-Check Selected Text (Ctrl+Shift+F)",
+    "default_title": "Search Selected Text (Ctrl+Shift+F)",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -45,7 +45,7 @@
         "default": "Ctrl+Shift+F",
         "mac": "Command+Shift+F"
       },
-      "description": "Open fact-checker popup"
+      "description": "Open Tavily Research Assistant popup"
     }
   }
 }

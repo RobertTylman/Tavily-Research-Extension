@@ -209,7 +209,7 @@ async function verifyText(text: string): Promise<{
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: 'fact-check-selection',
-    title: 'Fact-Check Selection',
+    title: 'Search Selection',
     contexts: ['selection'],
   });
 

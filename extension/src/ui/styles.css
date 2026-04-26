@@ -2,27 +2,27 @@
   --font-sans: 'IBM Plex Sans', 'Avenir Next', 'Segoe UI Variable', 'Trebuchet MS', sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Monaco', monospace;
 
-  --bg-page: radial-gradient(120% 120% at 0% 0%, #edf4ff 0%, #f5f9ff 45%, #f9fbff 100%);
-  --bg-app: rgba(255, 255, 255, 0.92);
-  --bg-card: #ffffff;
-  --bg-subtle: #f3f6fb;
-  --bg-subtle-strong: #e8eef8;
-  --text-primary: #0f172a;
-  --text-secondary: #334155;
-  --text-muted: #64748b;
-  --border-soft: #dbe3ef;
-  --border-strong: #c4d0e2;
+  --bg-page: linear-gradient(180deg, #fbf3ea 0%, #f4e3dc 45%, #e6d4d8 100%);
+  --bg-app: rgba(255, 250, 244, 0.86);
+  --bg-card: #fffaf3;
+  --bg-subtle: #f7ede4;
+  --bg-subtle-strong: #ecdfd2;
+  --text-primary: #1f1813;
+  --text-secondary: #4d3f37;
+  --text-muted: #8a7a70;
+  --border-soft: #ead9c9;
+  --border-strong: #d6bfa8;
 
-  --brand: #0f6adf;
-  --brand-strong: #0755b8;
-  --brand-soft: #dbeafe;
-  --ok: #15803d;
-  --warn: #c2410c;
-  --danger: #b91c1c;
+  --brand: #4a6a90;
+  --brand-strong: #2f4f73;
+  --brand-soft: rgba(74, 106, 144, 0.14);
+  --ok: #5d7a3e;
+  --warn: #b56a2e;
+  --danger: #a44141;
 
-  --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 12px 30px rgba(15, 23, 42, 0.09);
-  --ring: 0 0 0 3px rgba(15, 106, 223, 0.24);
+  --shadow-sm: 0 2px 8px rgba(80, 50, 30, 0.07);
+  --shadow-md: 0 12px 30px rgba(80, 50, 30, 0.1);
+  --ring: 0 0 0 3px rgba(74, 106, 144, 0.22);
 
   --radius-sm: 10px;
   --radius-md: 14px;
@@ -132,8 +132,15 @@ body {
   gap: var(--space-2);
 }
 
-.logo-icon-svg {
-  color: var(--brand);
+.logo-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  filter: brightness(0);
+}
+
+[data-theme='dark'] .logo-icon {
+  filter: none;
 }
 
 .logo-text {
@@ -234,9 +241,21 @@ a:focus-visible {
 }
 
 .text-input {
-  min-height: 138px;
-  resize: vertical;
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  resize: none;
   padding: var(--space-4);
+}
+
+.input-section {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.verify-button {
+  flex-shrink: 0;
 }
 
 .api-key-input {

@@ -79,7 +79,8 @@ const STRUCTURED_OUTPUT_SCHEMA: Record<string, unknown> = {
     warnings: {
       type: 'array',
       items: { type: 'string' },
-      description: 'Caveats a reader should know about, such as stale sources or one-sided coverage.',
+      description:
+        'Caveats a reader should know about, such as stale sources or one-sided coverage.',
     },
   },
 };
@@ -315,10 +316,7 @@ const NARRATION_PHASES: NarrationPhase[] = [
   {
     until: Number.POSITIVE_INFINITY,
     stage: 'finalizing',
-    messages: [
-      'Finalizing report and citations…',
-      'Almost done — wrapping up the verdict…',
-    ],
+    messages: ['Finalizing report and citations…', 'Almost done — wrapping up the verdict…'],
   },
 ];
 
@@ -369,7 +367,8 @@ function toVerdict(claim: Claim, result: TavilyResearchResult): Verdict {
     citations,
     summary: summary || undefined,
     report,
-    warnings: structured?.warnings && structured.warnings.length > 0 ? structured.warnings : undefined,
+    warnings:
+      structured?.warnings && structured.warnings.length > 0 ? structured.warnings : undefined,
     confidenceExplanation: buildConfidenceExplanation(structured, citations),
     researchTimeSeconds: result.response_time,
   };

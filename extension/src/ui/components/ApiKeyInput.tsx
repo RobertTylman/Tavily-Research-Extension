@@ -7,6 +7,7 @@
 import { useState, useEffect } from 'react';
 import { ResearchSettings, TavilyCitationFormat, TavilyResearchModel } from '../../lib/types';
 import { storage } from '../../utils/messaging';
+import { Icons } from '../icons';
 
 interface ApiKeyInputProps {
   onSaveApiKey: (apiKey: string) => Promise<void>;
@@ -85,8 +86,9 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
               className="toggle-visibility"
               onClick={() => setShowStoredKey(!showStoredKey)}
               title={showStoredKey ? 'Hide key' : 'Show key'}
+              aria-label={showStoredKey ? 'Hide key' : 'Show key'}
             >
-              {showStoredKey ? '👁️' : '👁️‍🗨️'}
+              {showStoredKey ? <Icons.EyeOff width={18} height={18} /> : <Icons.Eye width={18} height={18} />}
             </button>
           </div>
         </div>
@@ -108,8 +110,9 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
             className="toggle-visibility"
             onClick={() => setShowKey(!showKey)}
             title={showKey ? 'Hide key' : 'Show key'}
+            aria-label={showKey ? 'Hide key' : 'Show key'}
           >
-            {showKey ? '👁️' : '👁️‍🗨️'}
+            {showKey ? <Icons.EyeOff width={18} height={18} /> : <Icons.Eye width={18} height={18} />}
           </button>
         </div>
 
