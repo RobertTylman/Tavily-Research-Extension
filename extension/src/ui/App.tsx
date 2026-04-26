@@ -6,7 +6,14 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Claim, EntailmentSettings, Verdict, VerificationState } from '../lib/types';
+import {
+  Claim,
+  ExtensionMessage,
+  ResearchSettings,
+  ResearchStatus,
+  Verdict,
+  VerificationState,
+} from '../lib/types';
 import { sendToBackground, sendToContentScript } from '../utils/messaging';
 import { ClaimCard } from './components/ClaimCard';
 import { ApiKeyInput } from './components/ApiKeyInput';
@@ -29,6 +36,8 @@ export default function App() {
   const [inputText, setInputText] = useState('');
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [latestStatus, setLatestStatus] = useState<ResearchStatus | null>(null);
+  const [shareState, setShareState] = useState<'idle' | 'copied' | 'error'>('idle');
 
   // Theme state initialization
   const [theme, setTheme] = useState<Theme>(() => {
@@ -63,6 +72,17 @@ export default function App() {
     checkApiKey();
     checkForPendingVerification();
     loadSelectedText();
+  }, []);
+
+  // Subscribe to live research status events from the background worker.
+  useEffect(() => {
+    const handler = (message: ExtensionMessage) => {
+      if (message?.type === 'RESEARCH_STATUS') {
+        setLatestStatus(message.status);
+      }
+    };
+    chrome.runtime.onMessage.addListener(handler);
+    return () => chrome.runtime.onMessage.removeListener(handler);
   }, []);
 
   /**
@@ -133,6 +153,7 @@ export default function App() {
         return;
       }
 
+      setLatestStatus(null);
       setState({
         status: 'extracting',
         progress: 10,
@@ -194,13 +215,13 @@ export default function App() {
   };
 
   /**
-   * Save entailment provider settings
+   * Save Tavily research settings
    */
-  const handleEntailmentSettingsSave = async (settings: EntailmentSettings) => {
+  const handleResearchSettingsSave = async (settings: ResearchSettings) => {
     try {
-      await sendToBackground({ type: 'SET_ENTAILMENT_SETTINGS', settings });
+      await sendToBackground({ type: 'SET_RESEARCH_SETTINGS', settings });
     } catch (error) {
-      console.error('Failed to save entailment settings:', error);
+      console.error('Failed to save research settings:', error);
     }
   };
 
@@ -217,6 +238,31 @@ export default function App() {
   const handleReset = () => {
     setState(initialState);
     setInputText('');
+    setLatestStatus(null);
+    setShareState('idle');
+  };
+
+  /**
+   * Copy a shareable summary of the results to the clipboard.
+   * Falls back to navigator.share if clipboard is unavailable.
+   */
+  const handleShare = async () => {
+    const text = formatShareText(state.claims, state.verdicts);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        setShareState('copied');
+      } else if (typeof navigator.share === 'function') {
+        await navigator.share({ title: 'Fact-Check Result', text });
+        setShareState('copied');
+      } else {
+        throw new Error('No share or clipboard API available');
+      }
+    } catch (error) {
+      console.error('Share failed:', error);
+      setShareState('error');
+    }
+    setTimeout(() => setShareState('idle'), 2000);
   };
 
   // Show loading state while checking API key
@@ -248,7 +294,7 @@ export default function App() {
         />
         <ApiKeyInput
           onSaveApiKey={handleApiKeySave}
-          onSaveEntailmentSettings={handleEntailmentSettingsSave}
+          onSaveResearchSettings={handleResearchSettingsSave}
         />
       </div>
     );
@@ -287,15 +333,18 @@ export default function App() {
         state.status === 'searching' ||
         state.status === 'analyzing') && (
         <div className="loading-section">
-          <div className="spinner" />
-          <p className="loading-text">
-            {state.status === 'extracting' && 'Extracting claims...'}
-            {state.status === 'searching' && 'Searching for evidence...'}
-            {state.status === 'analyzing' && 'Analyzing sources...'}
-          </p>
-          <div className="progress-bar">
-            <div className="progress-fill" style={{ width: `${state.progress}%` }} />
+          <div className="loading-stage-label">
+            {(latestStatus?.stage ?? 'submitting').replace(/^./, (c) => c.toUpperCase())}
           </div>
+          <div className="loading-bar indeterminate" aria-label="Research in progress">
+            <div className="loading-bar-track" />
+          </div>
+          <p className="loading-text" key={latestStatus?.message ?? 'init'}>
+            {latestStatus?.message ?? 'Preparing research request…'}
+          </p>
+          <p className="loading-elapsed">
+            {latestStatus ? `${latestStatus.elapsedSeconds}s elapsed` : 'Starting up…'}
+          </p>
         </div>
       )}
 
@@ -316,6 +365,20 @@ export default function App() {
           <div className="results-header">
             <h2>Results</h2>
             <div className="results-actions">
+              {state.claims.length > 0 && (
+                <button
+                  className={`share-button ${shareState !== 'idle' ? `share-button-${shareState}` : ''}`}
+                  onClick={handleShare}
+                  disabled={shareState !== 'idle'}
+                  aria-live="polite"
+                >
+                  {shareState === 'copied'
+                    ? '✓ Copied'
+                    : shareState === 'error'
+                      ? 'Failed'
+                      : 'Share'}
+                </button>
+              )}
               <button className="new-check-button" onClick={handleReset}>
                 New Check
               </button>
@@ -337,4 +400,30 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function formatShareText(claims: Claim[], verdicts: Verdict[]): string {
+  const lines: string[] = ['Fact-Check Result'];
+  for (const claim of claims) {
+    const verdict = verdicts.find((v) => v.claimId === claim.id);
+    if (!verdict) continue;
+    lines.push('', `Claim: "${claim.text}"`);
+    lines.push(
+      `Verdict: ${verdict.verdict} (${Math.round(verdict.confidence * 100)}% confidence)`
+    );
+    if (verdict.summary) {
+      lines.push(`Summary: ${verdict.summary}`);
+    } else if (verdict.explanation) {
+      lines.push(`Explanation: ${verdict.explanation}`);
+    }
+    if (verdict.citations.length > 0) {
+      lines.push('Sources:');
+      verdict.citations.slice(0, 5).forEach((c, i) => {
+        const label = c.title || c.source;
+        lines.push(`  ${i + 1}. ${label} — ${c.url}`);
+      });
+    }
+  }
+  lines.push('', '— Live Fact-Checking Assistant');
+  return lines.join('\n');
 }

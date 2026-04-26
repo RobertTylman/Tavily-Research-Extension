@@ -2,7 +2,7 @@
  * Core type definitions for the Fact-Checking Extension
  *
  * These types define the data structures used throughout the verification pipeline:
- * Text → Claims → Evidence → Verdicts
+ * Text → Claims → Tavily Research → Verdicts
  */
 
 // ============================================================================
@@ -10,104 +10,15 @@
 // ============================================================================
 
 /**
- * Classification of a claim's verifiability
- * - FACTUAL: Objective, can be verified with public sources
- * - OPINION: Subjective statement, reflects personal views
- * - PREDICTION: Future-oriented claim, cannot be verified yet
- * - AMBIGUOUS: Lacks context or is too vague to classify
- */
-export type ClaimClassification = 'FACTUAL' | 'OPINION' | 'PREDICTION' | 'AMBIGUOUS';
-
-/**
- * An atomic claim extracted from user-provided text
+ * The text the user submitted for fact-checking. Sent verbatim to Tavily.
  */
 export interface Claim {
   /** Unique identifier for tracking through the pipeline */
   id: string;
-  /** Neutrally-phrased, atomic claim text */
+  /** Claim text sent to the research agent */
   text: string;
-  /** Original text before rephrasing (for user reference) */
+  /** Original text the user submitted (kept for UI display) */
   originalText: string;
-  /** Classification determining whether verification is appropriate */
-  classification: ClaimClassification;
-}
-
-// ============================================================================
-// EVIDENCE TYPES
-// ============================================================================
-
-/**
- * How a piece of evidence relates to a claim
- * - SUPPORTS: Evidence confirms the claim
- * - CONTRADICTS: Evidence refutes the claim
- * - INCONCLUSIVE: Evidence is tangentially related but not definitive
- */
-export type EvidenceStance = 'SUPPORTS' | 'CONTRADICTS' | 'INCONCLUSIVE';
-
-/**
- * A single piece of evidence from a search result
- */
-export interface Evidence {
-  /** Result title/headline from the search provider */
-  title?: string;
-  /** Name of the source (e.g., "Reuters", "Wikipedia") */
-  source: string;
-  /** URL to the original content */
-  url: string;
-  /** Relevant excerpt from the source */
-  snippet: string;
-  /** Full content if available (for deeper analysis) */
-  rawContent?: string;
-  /** How this evidence relates to the claim */
-  stance: EvidenceStance;
-  /** Authority score 0-1 based on source credibility */
-  authority: number;
-  /** Publication date if available */
-  publishedDate: string | null;
-  /** Optional one-sentence rationale from entailment provider */
-  reasoning?: string;
-  /** Which entailment provider produced the final stance */
-  entailmentProvider?: string;
-  /** Entailment confidence, if available */
-  entailmentConfidence?: number;
-}
-
-// ============================================================================
-// ENTAILMENT SETTINGS
-// ============================================================================
-
-export type EntailmentProvider = 'regex' | 'on_device_nli' | 'llm';
-export type LlmProvider = 'openai' | 'anthropic' | 'ollama';
-
-export interface EntailmentSettings {
-  provider: EntailmentProvider;
-  llmProvider: LlmProvider;
-  llmApiKey?: string;
-  llmModel?: string;
-  ollamaBaseUrl?: string;
-}
-
-export interface EntailmentResult {
-  stance: EvidenceStance;
-  confidence: number;
-  reasoning: string;
-  provider: string;
-}
-
-/**
- * Aggregated evidence summary for verdict generation
- */
-export interface AggregatedEvidence {
-  /** All evidence classified as supporting */
-  supporting: Evidence[];
-  /** All evidence classified as contradicting */
-  contradicting: Evidence[];
-  /** All inconclusive evidence */
-  inconclusive: Evidence[];
-  /** Overall consensus strength (-1 to 1, negative = contradicting) */
-  consensusScore: number;
-  /** Total number of sources analyzed */
-  totalSources: number;
 }
 
 // ============================================================================
@@ -139,12 +50,14 @@ export interface Citation {
   publishedDate?: string | null;
   /** Authority score carried through for transparency */
   authority?: number;
-  /** Evidence stance classification for this source */
-  stance?: EvidenceStance;
-  /** Entailment provider used for this source */
-  entailmentProvider?: string;
-  /** Entailment reasoning from provider */
+  /** Optional stance kept for backwards compatibility with UI widgets */
+  stance?: 'SUPPORTS' | 'CONTRADICTS' | 'INCONCLUSIVE';
+  /** Short rationale provided by the research agent, if any */
   reasoning?: string;
+  /** Which component produced this citation (always "tavily_research" today) */
+  entailmentProvider?: string;
+  /** Source favicon URL returned by the research endpoint */
+  favicon?: string;
 }
 
 /**
@@ -165,41 +78,103 @@ export interface Verdict {
   warnings?: string[];
   /** Explanation of why confidence is at this level */
   confidenceExplanation?: string;
+  /** Full research report markdown produced by Tavily's research endpoint */
+  report?: string;
+  /** Short one-paragraph summary of the report */
+  summary?: string;
+  /** How long the research call took, in seconds */
+  researchTimeSeconds?: number;
 }
 
 // ============================================================================
-// TAVILY API TYPES
+// TAVILY RESEARCH API TYPES
 // ============================================================================
 
+export type TavilyResearchModel = 'auto' | 'mini' | 'pro';
+export type TavilyCitationFormat = 'numbered' | 'mla' | 'apa' | 'chicago';
+export type TavilyResearchStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
+
 /**
- * Tavily search request configuration
+ * Request body for POST /research
  */
-export interface TavilySearchRequest {
-  query: string;
-  search_depth: 'basic' | 'advanced';
-  include_raw_content: boolean;
-  max_results: number;
-  include_answer: boolean;
+export interface TavilyResearchRequest {
+  input: string;
+  model?: TavilyResearchModel;
+  stream?: boolean;
+  output_schema?: Record<string, unknown>;
+  citation_format?: TavilyCitationFormat;
 }
 
 /**
- * Individual result from Tavily search
+ * A single source returned by the research endpoint
  */
-export interface TavilySearchResult {
-  title: string;
+export interface TavilyResearchSource {
+  title?: string;
   url: string;
-  content: string;
-  raw_content?: string;
-  score: number;
+  favicon?: string;
+  snippet?: string;
   published_date?: string;
 }
 
 /**
- * Tavily search response
+ * Response shape for POST /research (initial submission)
  */
-export interface TavilySearchResponse {
-  results: TavilySearchResult[];
-  query: string;
+export interface TavilyResearchSubmission {
+  request_id: string;
+  created_at: string;
+  status: TavilyResearchStatus;
+  input: string;
+  model: string;
+  response_time?: number;
+}
+
+/**
+ * Response shape for GET /research/{request_id}
+ */
+export interface TavilyResearchResult {
+  request_id: string;
+  created_at: string;
+  status: TavilyResearchStatus;
+  /** Markdown report content when status is completed */
+  content?: string | Record<string, unknown>;
+  sources?: TavilyResearchSource[];
+  response_time?: number;
+  error?: string;
+}
+
+/**
+ * Structured output schema the extension asks Tavily to return.
+ * This mirrors the verdict we surface to the user.
+ */
+export interface TavilyStructuredVerdict {
+  verdict: VerdictLabel;
+  confidence: number;
+  summary: string;
+  explanation: string;
+  report: string;
+  key_findings?: string[];
+  warnings?: string[];
+}
+
+// ============================================================================
+// LIVE RESEARCH STATUS
+// ============================================================================
+
+export type ResearchStage =
+  | 'submitting'
+  | 'searching'
+  | 'analyzing'
+  | 'synthesizing'
+  | 'finalizing';
+
+/**
+ * Real-time progress event emitted while a research task is in flight.
+ * Used to drive the animated loading screen with a sense of streaming.
+ */
+export interface ResearchStatus {
+  stage: ResearchStage;
+  message: string;
+  elapsedSeconds: number;
 }
 
 // ============================================================================
@@ -218,11 +193,21 @@ export type ExtensionMessage =
   | { type: 'VERIFICATION_PROGRESS'; stage: string; progress: number }
   | { type: 'VERIFICATION_COMPLETE'; claims: Claim[]; verdicts: Verdict[] }
   | { type: 'VERIFICATION_ERROR'; error: string }
+  | { type: 'RESEARCH_STATUS'; claimId: string; status: ResearchStatus }
   | { type: 'SET_API_KEY'; apiKey: string }
   | { type: 'GET_API_KEY' }
   | { type: 'API_KEY_RESPONSE'; hasKey: boolean }
-  | { type: 'GET_ENTAILMENT_SETTINGS' }
-  | { type: 'SET_ENTAILMENT_SETTINGS'; settings: EntailmentSettings };
+  | { type: 'GET_RESEARCH_SETTINGS' }
+  | { type: 'SET_RESEARCH_SETTINGS'; settings: ResearchSettings };
+
+// ============================================================================
+// RESEARCH SETTINGS
+// ============================================================================
+
+export interface ResearchSettings {
+  model: TavilyResearchModel;
+  citationFormat: TavilyCitationFormat;
+}
 
 /**
  * Verification pipeline state

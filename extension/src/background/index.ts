@@ -1,20 +1,17 @@
 /**
  * Background Service Worker
  *
- * Handles all API calls and orchestrates the verification pipeline.
- * This is the only place where the Tavily API key is used.
+ * Drives the fact-check pipeline. The heavy lifting (multi-source search,
+ * report generation, verdict, confidence) is delegated to Tavily's `/research`
+ * endpoint; this worker only has to extract claims and fan research tasks out
+ * per claim.
  *
- * Security Model:
- * - API key is stored in chrome.storage.local (never in content)
- * - All Tavily API calls happen here, not in content script or popup
- * - Rate limiting is enforced at this layer
+ * Security:
+ * - API key is stored in chrome.storage.local.
+ * - All research API calls happen in this worker, never in page context.
  */
 
-import { extractClaims, getFactualClaims } from '../lib/claimExtractor';
-import { searchForEvidence, generateSearchQueries, TavilyError } from '../lib/tavily';
-import { processSearchResults } from '../lib/verifier';
-import { buildEntailmentOverrides } from '../lib/entailment';
-import { generateVerdict } from '../lib/verdictEngine';
+import { researchClaim, TavilyError } from '../lib/tavily';
 import {
   checkRateLimit,
   recordRequest,
@@ -29,11 +26,7 @@ import { Claim, Verdict, ExtensionMessage } from '../lib/types';
 // MESSAGE HANDLING
 // ============================================================================
 
-/**
- * Handle incoming messages from popup and content scripts
- */
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
-  // Handle async operations
   handleMessage(message, sender)
     .then(sendResponse)
     .catch((error) => {
@@ -41,13 +34,9 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       sendResponse({ error: error.message });
     });
 
-  // Return true to indicate we'll respond asynchronously
   return true;
 });
 
-/**
- * Process incoming messages
- */
 async function handleMessage(
   message: ExtensionMessage,
   _sender: chrome.runtime.MessageSender
@@ -65,13 +54,13 @@ async function handleMessage(
       return { hasKey };
     }
 
-    case 'GET_ENTAILMENT_SETTINGS': {
-      const settings = await storage.getEntailmentSettings();
+    case 'GET_RESEARCH_SETTINGS': {
+      const settings = await storage.getResearchSettings();
       return { settings };
     }
 
-    case 'SET_ENTAILMENT_SETTINGS':
-      await storage.setEntailmentSettings(message.settings);
+    case 'SET_RESEARCH_SETTINGS':
+      await storage.setResearchSettings(message.settings);
       return { success: true };
 
     default:
@@ -83,20 +72,12 @@ async function handleMessage(
 // VERIFICATION PIPELINE
 // ============================================================================
 
-/**
- * Main verification function
- * Orchestrates the full pipeline: extract → search → analyze → verdict
- *
- * @param text - Raw text to verify
- * @returns Object with extracted claims and verdicts
- */
 async function verifyText(text: string): Promise<{
   claims: Claim[];
   verdicts: Verdict[];
   error?: string;
 }> {
   try {
-    // Step 1: Check for API key
     const apiKey = await storage.getApiKey();
     if (!apiKey) {
       return {
@@ -106,82 +87,72 @@ async function verifyText(text: string): Promise<{
       };
     }
 
-    // Step 2: Extract claims from text
-    const entailmentSettings = await storage.getEntailmentSettings();
-
-    // Step 3: Extract claims from text
-    console.log('[Background] Extracting claims from text...');
-    const allClaims = extractClaims(text);
-
-    if (allClaims.length === 0) {
+    const trimmed = text.trim();
+    if (trimmed.length === 0) {
       return {
         claims: [],
         verdicts: [],
-        error: 'No verifiable claims found in the text.',
+        error: 'Please enter some text to fact-check.',
       };
     }
 
-    // Step 4: Filter to factual claims only
-    const factualClaims = getFactualClaims(allClaims);
-    console.log(
-      `[Background] Found ${allClaims.length} claims, ${factualClaims.length} are factual`
-    );
+    const researchSettings = await storage.getResearchSettings();
 
-    // Step 5: Verify each factual claim
+    const claim: Claim = {
+      id: `claim_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      text: trimmed,
+      originalText: trimmed,
+    };
+    const allClaims: Claim[] = [claim];
+
     const verdicts: Verdict[] = [];
 
-    for (const claim of factualClaims) {
+    for (const claim of allClaims) {
       try {
-        // Check cache first
         const cached = await getCachedVerdict(claim.text);
         if (cached) {
           console.log(`[Background] Cache hit for claim: "${claim.text.substring(0, 50)}..."`);
           verdicts.push({
             ...cached.verdict,
-            claimId: claim.id, // Update ID to match current session
+            claimId: claim.id,
           });
           continue;
         }
 
-        // Check rate limit before each search
         checkRateLimit();
 
-        console.log(`[Background] Verifying claim: "${claim.text.substring(0, 50)}..."`);
+        console.log(`[Background] Researching claim: "${claim.text.substring(0, 50)}..."`);
 
-        // Search for evidence
-        const searchResults = await searchForEvidence(claim, apiKey);
+        const verdict = await researchClaim(claim, apiKey, {
+          model: researchSettings.model,
+          citationFormat: researchSettings.citationFormat,
+          onStatus: (status) => {
+            chrome.runtime
+              .sendMessage({
+                type: 'RESEARCH_STATUS',
+                claimId: claim.id,
+                status,
+              })
+              .catch(() => {
+                // Popup is closed — broadcasts have no listener; safe to ignore.
+              });
+          },
+        });
         recordRequest();
 
-        console.log(`[Background] Found ${searchResults.length} sources`);
-
-        // Run entailment layer (regex fast path + provider-backed NLI/LLM)
-        const entailmentOverrides = await buildEntailmentOverrides(
-          claim,
-          searchResults,
-          entailmentSettings
-        );
-
-        // Process and aggregate evidence
-        const aggregatedEvidence = processSearchResults(claim, searchResults, entailmentOverrides);
-
-        // Generate verdict
-        const verdict = generateVerdict(claim, aggregatedEvidence);
         verdicts.push(verdict);
 
-        // Cache only when the verdict has enough signal to be reusable.
         const shouldCacheVerdict = !(
           verdict.verdict === 'INSUFFICIENT_EVIDENCE' && verdict.confidence <= 0.2
         );
         if (shouldCacheVerdict) {
-          const queries = generateSearchQueries(claim);
-          await cacheVerification(claim, verdict, queries);
+          await cacheVerification(claim, verdict);
         }
 
         console.log(`[Background] Verdict: ${verdict.verdict} (${verdict.confidence})`);
       } catch (error) {
         if (error instanceof RateLimitError) {
           console.warn('[Background] Rate limited, skipping remaining claims');
-          // Add placeholder verdict for remaining claims
           verdicts.push({
             claimId: claim.id,
             verdict: 'INSUFFICIENT_EVIDENCE',
@@ -190,14 +161,25 @@ async function verifyText(text: string): Promise<{
             citations: [],
           });
         } else if (error instanceof TavilyError) {
-          console.error('[Background] Tavily API error:', error.message);
+          console.error(
+            '[Background] Tavily research error:',
+            error.statusCode,
+            error.message,
+            error.responseBody
+          );
+          const baseExplanation = error.isAuthError()
+            ? 'API authentication failed. Please check your Tavily API key.'
+            : error.isTimeout()
+              ? 'Research task timed out before finishing. Please try again in a moment.'
+              : 'Research failed.';
+          const detail = `[${error.statusCode}] ${error.message}${
+            error.responseBody ? ` — ${error.responseBody.slice(0, 500)}` : ''
+          }`;
           verdicts.push({
             claimId: claim.id,
             verdict: 'INSUFFICIENT_EVIDENCE',
             confidence: 0,
-            explanation: error.isAuthError()
-              ? 'API authentication failed. Please check your Tavily API key.'
-              : 'Search failed. Please try again later.',
+            explanation: `${baseExplanation} ${detail}`,
             citations: [],
           });
         } else {
@@ -207,7 +189,7 @@ async function verifyText(text: string): Promise<{
     }
 
     return {
-      claims: allClaims, // Return all claims (including non-factual)
+      claims: allClaims,
       verdicts,
     };
   } catch (error) {
@@ -224,9 +206,6 @@ async function verifyText(text: string): Promise<{
 // CONTEXT MENU
 // ============================================================================
 
-/**
- * Create context menu item for text selection
- */
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: 'fact-check-selection',
@@ -237,9 +216,6 @@ chrome.runtime.onInstalled.addListener(() => {
   console.log('[Background] Extension installed, context menu created');
 });
 
-/**
- * Handle context menu clicks
- */
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === 'fact-check-selection' && info.selectionText) {
     console.log(
@@ -247,7 +223,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       info.selectionText.substring(0, 50)
     );
 
-    // Store the selected text for the popup to access
     await chrome.storage.session.set({
       pendingVerification: {
         text: info.selectionText,
@@ -256,13 +231,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       },
     });
 
-    // Open the popup programmatically (Chrome 127+)
     try {
       await chrome.action.openPopup();
       console.log('[Background] Popup opened successfully');
     } catch (error) {
       console.log('[Background] Could not open popup programmatically:', error);
-      // Fallback: Create a new popup window if openPopup is not supported
       chrome.windows.create({
         url: chrome.runtime.getURL('popup.html'),
         type: 'popup',

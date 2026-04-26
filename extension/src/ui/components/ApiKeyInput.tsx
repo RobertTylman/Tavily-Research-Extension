@@ -5,32 +5,28 @@
  */
 
 import { useState, useEffect } from 'react';
-import { EntailmentSettings } from '../../lib/types';
+import { ResearchSettings, TavilyCitationFormat, TavilyResearchModel } from '../../lib/types';
 import { storage } from '../../utils/messaging';
 
 interface ApiKeyInputProps {
   onSaveApiKey: (apiKey: string) => Promise<void>;
-  onSaveEntailmentSettings: (settings: EntailmentSettings) => Promise<void>;
+  onSaveResearchSettings: (settings: ResearchSettings) => Promise<void>;
 }
 
-const defaultSettings: EntailmentSettings = {
-  provider: 'on_device_nli',
-  llmProvider: 'openai',
-  llmModel: 'gpt-4.1-mini',
-  ollamaBaseUrl: 'http://localhost:11434',
+const defaultSettings: ResearchSettings = {
+  model: 'mini',
+  citationFormat: 'numbered',
 };
 
-export function ApiKeyInput({ onSaveApiKey, onSaveEntailmentSettings }: ApiKeyInputProps) {
+export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInputProps) {
   const [apiKey, setApiKey] = useState('');
   const [storedKey, setStoredKey] = useState<string | null>(null);
   const [showStoredKey, setShowStoredKey] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [settings, setSettings] = useState<EntailmentSettings>(defaultSettings);
-  const [showLlmKey, setShowLlmKey] = useState(false);
+  const [settings, setSettings] = useState<ResearchSettings>(defaultSettings);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
-  // Load stored API key on mount
   useEffect(() => {
     storage.getApiKey().then((key: string | null) => {
       if (key) {
@@ -38,7 +34,7 @@ export function ApiKeyInput({ onSaveApiKey, onSaveEntailmentSettings }: ApiKeyIn
       }
     });
 
-    storage.getEntailmentSettings().then((loaded) => {
+    storage.getResearchSettings().then((loaded: ResearchSettings) => {
       setSettings(loaded);
     });
   }, []);
@@ -61,7 +57,7 @@ export function ApiKeyInput({ onSaveApiKey, onSaveEntailmentSettings }: ApiKeyIn
     e.preventDefault();
     setIsSavingSettings(true);
     try {
-      await onSaveEntailmentSettings(settings);
+      await onSaveResearchSettings(settings);
     } finally {
       setIsSavingSettings(false);
     }
@@ -75,7 +71,9 @@ export function ApiKeyInput({ onSaveApiKey, onSaveEntailmentSettings }: ApiKeyIn
   return (
     <div className="api-key-section">
       <h2>Configure API Key</h2>
-      <p className="api-key-description">This extension uses the Tavily API for web search.</p>
+      <p className="api-key-description">
+        This extension uses the Tavily Research API for fact-checking.
+      </p>
 
       {storedKey && (
         <div className="stored-key-section">
@@ -121,101 +119,48 @@ export function ApiKeyInput({ onSaveApiKey, onSaveEntailmentSettings }: ApiKeyIn
       </form>
 
       <form onSubmit={handleSettingsSubmit} className="api-key-form">
-        <h3>Entailment Provider</h3>
+        <h3>Research Settings</h3>
         <p className="api-key-description">
-          Choose how evidence stance is classified. On-device NLI and LLM providers are the primary
-          stance engines; regex mode is a minimal fallback.
+          Choose the Tavily research model and citation format used when generating fact-check
+          reports.
         </p>
         <div className="input-wrapper">
           <select
             className="api-key-input"
-            value={settings.provider}
+            value={settings.model}
             onChange={(e) =>
-              setSettings((prev) => ({
+              setSettings((prev: ResearchSettings) => ({
                 ...prev,
-                provider: e.target.value as EntailmentSettings['provider'],
+                model: e.target.value as TavilyResearchModel,
               }))
             }
           >
-            <option value="on_device_nli">On-device NLI (transformers.js)</option>
-            <option value="llm">LLM-backed entailment</option>
-            <option value="regex">Regex heuristics only (fallback)</option>
+            <option value="mini">Mini (fastest, cheapest)</option>
+            <option value="auto">Auto</option>
+            <option value="pro">Pro (deepest research)</option>
           </select>
         </div>
 
-        {settings.provider === 'llm' && (
-          <>
-            <div className="input-wrapper">
-              <select
-                className="api-key-input"
-                value={settings.llmProvider}
-                onChange={(e) =>
-                  setSettings((prev) => ({
-                    ...prev,
-                    llmProvider: e.target.value as EntailmentSettings['llmProvider'],
-                  }))
-                }
-              >
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="ollama">Ollama (local)</option>
-              </select>
-            </div>
-
-            {settings.llmProvider !== 'ollama' && (
-              <div className="input-wrapper">
-                <input
-                  type={showLlmKey ? 'text' : 'password'}
-                  value={settings.llmApiKey || ''}
-                  onChange={(e) => setSettings((prev) => ({ ...prev, llmApiKey: e.target.value }))}
-                  placeholder="Enter LLM API key"
-                  className="api-key-input"
-                  autoComplete="off"
-                />
-                <button
-                  type="button"
-                  className="toggle-visibility"
-                  onClick={() => setShowLlmKey(!showLlmKey)}
-                  title={showLlmKey ? 'Hide key' : 'Show key'}
-                >
-                  {showLlmKey ? '👁️' : '👁️‍🗨️'}
-                </button>
-              </div>
-            )}
-
-            <div className="input-wrapper">
-              <input
-                type="text"
-                value={settings.llmModel || ''}
-                onChange={(e) => setSettings((prev) => ({ ...prev, llmModel: e.target.value }))}
-                placeholder={
-                  settings.llmProvider === 'ollama' ? 'Ollama model (e.g. llama3.1)' : 'Model name'
-                }
-                className="api-key-input"
-              />
-            </div>
-
-            {settings.llmProvider === 'ollama' && (
-              <div className="input-wrapper">
-                <input
-                  type="text"
-                  value={settings.ollamaBaseUrl || ''}
-                  onChange={(e) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      ollamaBaseUrl: e.target.value,
-                    }))
-                  }
-                  placeholder="Ollama base URL (e.g. http://localhost:11434)"
-                  className="api-key-input"
-                />
-              </div>
-            )}
-          </>
-        )}
+        <div className="input-wrapper">
+          <select
+            className="api-key-input"
+            value={settings.citationFormat}
+            onChange={(e) =>
+              setSettings((prev: ResearchSettings) => ({
+                ...prev,
+                citationFormat: e.target.value as TavilyCitationFormat,
+              }))
+            }
+          >
+            <option value="numbered">Numbered citations [1]</option>
+            <option value="mla">MLA</option>
+            <option value="apa">APA</option>
+            <option value="chicago">Chicago</option>
+          </select>
+        </div>
 
         <button type="submit" className="save-button" disabled={isSavingSettings}>
-          {isSavingSettings ? 'Saving...' : 'Save Entailment Settings'}
+          {isSavingSettings ? 'Saving...' : 'Save Research Settings'}
         </button>
       </form>
 

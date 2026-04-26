@@ -17,6 +17,7 @@ import { Citation } from '../../lib/types';
 
 interface CitationListProps {
   citations: Citation[];
+  claimText: string;
 }
 
 interface TimelineBucket {
@@ -53,7 +54,7 @@ const defaultMarkerIcon = L.icon({
 
 L.Marker.prototype.options.icon = defaultMarkerIcon;
 
-export function CitationList({ citations }: CitationListProps) {
+export function CitationList({ citations, claimText }: CitationListProps) {
   const timelineBuckets = useMemo(() => buildTimelineBuckets(citations), [citations]);
   const [selectedBucketIndex, setSelectedBucketIndex] = useState(0);
   const [geocodedCitations, setGeocodedCitations] = useState<GeocodedCitation[]>([]);
@@ -76,31 +77,36 @@ export function CitationList({ citations }: CitationListProps) {
   useEffect(() => {
     let cancelled = false;
 
-    const geocodeForActiveCitations = async () => {
-      const candidates = activeCitations
-        .map((citation) => ({
-          citation,
-          query: extractLocationQuery(citation),
-        }))
-        .filter((item): item is { citation: Citation; query: string } => Boolean(item.query))
-        .slice(0, 7);
+    const geocodeForClaim = async () => {
+      const candidateQueries = extractClaimLocations(claimText).slice(0, 5);
+      if (candidateQueries.length === 0) {
+        if (!cancelled) setGeocodedCitations([]);
+        return;
+      }
 
-      const resolved = await Promise.all(
-        candidates.map(async ({ citation, query }) => {
-          const point = await geocodeLocation(query);
-          if (!point) {
-            return null;
-          }
-          return { citation, query, point };
-        })
-      );
+      const points: { query: string; point: GeocodePoint }[] = [];
+      for (const query of candidateQueries) {
+        const point = await geocodeLocation(query);
+        if (point) {
+          points.push({ query, point });
+        }
+      }
+
+      const resolved: GeocodedCitation[] = [];
+      for (const { query, point } of points) {
+        const matchedCitation =
+          activeCitations.find((c) => mentionsLocation(c, query)) || activeCitations[0];
+        if (matchedCitation) {
+          resolved.push({ citation: matchedCitation, query, point });
+        }
+      }
 
       if (!cancelled) {
-        setGeocodedCitations(resolved.filter((item): item is GeocodedCitation => item !== null));
+        setGeocodedCitations(resolved);
       }
     };
 
-    geocodeForActiveCitations().catch(() => {
+    geocodeForClaim().catch(() => {
       if (!cancelled) {
         setGeocodedCitations([]);
       }
@@ -109,7 +115,7 @@ export function CitationList({ citations }: CitationListProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeCitations]);
+  }, [claimText, activeCitations]);
 
   const mapCenter: [number, number] = geocodedCitations.length
     ? [geocodedCitations[0].point.lat, geocodedCitations[0].point.lon]
@@ -123,9 +129,13 @@ export function CitationList({ citations }: CitationListProps) {
     return null;
   }
 
+  const showMap = geocodedCitations.length > 0;
+
   return (
     <div className="citations-list">
-      <h4 className="citations-heading">Sources Timeline & Map</h4>
+      <h4 className="citations-heading">
+        {showMap ? 'Sources Timeline & Map' : 'Sources Timeline'}
+      </h4>
 
       {timelineBuckets.length > 1 && (
         <div className="timeline-control">
@@ -149,38 +159,35 @@ export function CitationList({ citations }: CitationListProps) {
         </div>
       )}
 
-      <div className="citation-map-wrapper">
-        <MapContainer
-          key={mapKey}
-          center={mapCenter}
-          zoom={mapZoom}
-          className="citation-map"
-          scrollWheelZoom={false}
-        >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          {geocodedCitations.map((entry) => (
-            <Marker
-              key={`${entry.citation.url}-${entry.query}`}
-              position={[entry.point.lat, entry.point.lon]}
-            >
-              <Popup>
-                <div className="map-popup">
-                  <strong>{entry.citation.title || entry.citation.source}</strong>
-                  <div>{entry.point.displayName}</div>
-                </div>
-              </Popup>
-            </Marker>
-          ))}
-        </MapContainer>
-        {geocodedCitations.length === 0 && (
-          <p className="timeline-note">
-            No mappable locations detected from the currently selected articles.
-          </p>
-        )}
-      </div>
+      {showMap && (
+        <div className="citation-map-wrapper">
+          <MapContainer
+            key={mapKey}
+            center={mapCenter}
+            zoom={mapZoom}
+            className="citation-map"
+            scrollWheelZoom={false}
+          >
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            {geocodedCitations.map((entry) => (
+              <Marker
+                key={`${entry.citation.url}-${entry.query}`}
+                position={[entry.point.lat, entry.point.lon]}
+              >
+                <Popup>
+                  <div className="map-popup">
+                    <strong>{entry.point.displayName}</strong>
+                    <div>Mentioned in claim: "{entry.query}"</div>
+                  </div>
+                </Popup>
+              </Marker>
+            ))}
+          </MapContainer>
+        </div>
+      )}
 
       {activeCitations.map((citation, index) => (
         <div key={`${citation.url}-${index}`} className="citation-item">
@@ -274,6 +281,8 @@ function formatDisplayDate(value: string): string {
   }).format(parsed);
 }
 
+const PLACE_CLASSES = new Set(['place', 'boundary', 'natural', 'waterway']);
+
 async function geocodeLocation(query: string): Promise<GeocodePoint | null> {
   if (geocodeCache.has(query)) {
     return geocodeCache.get(query) || null;
@@ -281,13 +290,11 @@ async function geocodeLocation(query: string): Promise<GeocodePoint | null> {
 
   try {
     const response = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(
+      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=0&q=${encodeURIComponent(
         query
       )}`,
       {
-        headers: {
-          Accept: 'application/json',
-        },
+        headers: { Accept: 'application/json' },
       }
     );
     if (!response.ok) {
@@ -299,9 +306,20 @@ async function geocodeLocation(query: string): Promise<GeocodePoint | null> {
       lat?: string;
       lon?: string;
       display_name?: string;
+      class?: string;
+      importance?: number;
     }>;
     const top = data[0];
-    if (!top?.lat || !top?.lon) {
+
+    // Require Nominatim to classify this as an actual place (not a person, business,
+    // university, etc). This filters out false positives like "Donald Trump" matching
+    // a person record or a Trump Tower entry.
+    if (!top?.lat || !top?.lon || !top.class || !PLACE_CLASSES.has(top.class)) {
+      geocodeCache.set(query, null);
+      return null;
+    }
+
+    if (typeof top.importance === 'number' && top.importance < 0.4) {
       geocodeCache.set(query, null);
       return null;
     }
@@ -324,51 +342,101 @@ async function geocodeLocation(query: string): Promise<GeocodePoint | null> {
   }
 }
 
-function extractLocationQuery(citation: Citation): string | null {
-  const combined = `${citation.title || ''}. ${citation.snippet || ''}`.trim();
-  const lowered = combined.toLowerCase();
+const KNOWN_LOCATION_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /\bstrait of hormuz\b/i, label: 'Strait of Hormuz' },
+  { pattern: /\bgaza\b/i, label: 'Gaza' },
+  { pattern: /\bisrael\b/i, label: 'Israel' },
+  { pattern: /\biran\b/i, label: 'Iran' },
+  { pattern: /\bukraine\b/i, label: 'Ukraine' },
+  { pattern: /\brussia\b/i, label: 'Russia' },
+  { pattern: /\bred sea\b/i, label: 'Red Sea' },
+  { pattern: /\blebanon\b/i, label: 'Lebanon' },
+  { pattern: /\byemen\b/i, label: 'Yemen' },
+  { pattern: /\bsyria\b/i, label: 'Syria' },
+];
 
-  const knownLocations: Array<{ pattern: RegExp; label: string }> = [
-    { pattern: /\bstrait of hormuz\b/i, label: 'Strait of Hormuz' },
-    { pattern: /\bgaza\b/i, label: 'Gaza' },
-    { pattern: /\bisrael\b/i, label: 'Israel' },
-    { pattern: /\biran\b/i, label: 'Iran' },
-    { pattern: /\bukraine\b/i, label: 'Ukraine' },
-    { pattern: /\brussia\b/i, label: 'Russia' },
-    { pattern: /\bred sea\b/i, label: 'Red Sea' },
-    { pattern: /\blebanon\b/i, label: 'Lebanon' },
-    { pattern: /\byemen\b/i, label: 'Yemen' },
-    { pattern: /\bsyria\b/i, label: 'Syria' },
-  ];
+const STOPWORDS = new Set([
+  'the',
+  'a',
+  'an',
+  'and',
+  'or',
+  'but',
+  'of',
+  'in',
+  'on',
+  'at',
+  'to',
+  'for',
+  'with',
+  'from',
+  'by',
+  'as',
+  'is',
+  'was',
+  'were',
+  'are',
+  'be',
+  'been',
+  'has',
+  'have',
+  'had',
+  'will',
+  'would',
+  'could',
+  'should',
+  'may',
+  'might',
+  'this',
+  'that',
+  'these',
+  'those',
+  'it',
+  'its',
+]);
 
-  for (const location of knownLocations) {
-    if (location.pattern.test(lowered)) {
-      return location.label;
+/**
+ * Pull location candidates out of the *claim* text only. We look for capitalized
+ * multi-word phrases (likely proper nouns) and rely on Nominatim's `class` field
+ * to reject person/business names downstream. Single capitalized words are only
+ * accepted at the start of a sentence if they aren't a leading-stopword.
+ */
+function extractClaimLocations(text: string): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  for (const { pattern, label } of KNOWN_LOCATION_PATTERNS) {
+    if (pattern.test(text) && !seen.has(label.toLowerCase())) {
+      candidates.push(label);
+      seen.add(label.toLowerCase());
     }
   }
 
-  const prepositionMatch = combined.match(
-    /\b(?:in|at|near|from|around|off|between)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})/
-  );
-  if (prepositionMatch?.[1]) {
-    return prepositionMatch[1].trim();
+  // Multi-word capitalized phrases (e.g. "Cape Town", "New York City").
+  const phraseMatches = [...text.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b/g)];
+  for (const match of phraseMatches) {
+    const phrase = match[1].trim();
+    const key = phrase.toLowerCase();
+    if (seen.has(key)) continue;
+    if (STOPWORDS.has(key.split(' ')[0])) continue;
+    candidates.push(phrase);
+    seen.add(key);
   }
 
-  const properNouns = [...combined.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/g)]
-    .map((item) => item[1])
-    .filter((term) => !NON_LOCATION_TERMS.has(term.toLowerCase()));
+  // Prepositional single-word locations (e.g. "in Pennsylvania", "near Tehran").
+  const prepMatches = [...text.matchAll(/\b(?:in|at|near|from|off)\s+([A-Z][a-z]{3,})\b/g)];
+  for (const match of prepMatches) {
+    const word = match[1].trim();
+    const key = word.toLowerCase();
+    if (seen.has(key)) continue;
+    candidates.push(word);
+    seen.add(key);
+  }
 
-  return properNouns.length > 0 ? properNouns[0] : null;
+  return candidates;
 }
 
-const NON_LOCATION_TERMS = new Set([
-  'reuters',
-  'associated press',
-  'ap',
-  'bbc',
-  'cnn',
-  'tavily',
-  'fact checker',
-  'fact-check',
-  'openai',
-]);
+function mentionsLocation(citation: Citation, location: string): boolean {
+  const haystack = `${citation.title || ''} ${citation.snippet || ''}`.toLowerCase();
+  return haystack.includes(location.toLowerCase());
+}

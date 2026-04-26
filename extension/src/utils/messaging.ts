@@ -5,13 +5,11 @@
  * Handles communication between popup, content script, and background worker.
  */
 
-import { EntailmentSettings, ExtensionMessage } from '../lib/types';
+import { ExtensionMessage, ResearchSettings } from '../lib/types';
 
-const DEFAULT_ENTAILMENT_SETTINGS: EntailmentSettings = {
-  provider: 'on_device_nli',
-  llmProvider: 'openai',
-  llmModel: 'gpt-4.1-mini',
-  ollamaBaseUrl: 'http://localhost:11434',
+const DEFAULT_RESEARCH_SETTINGS: ResearchSettings = {
+  model: 'mini',
+  citationFormat: 'numbered',
 };
 
 /**
@@ -106,21 +104,47 @@ export const storage = {
   },
 
   /**
-   * Get entailment settings
+   * Get research settings
    */
-  async getEntailmentSettings(): Promise<EntailmentSettings> {
-    const result = await chrome.storage.local.get('entailmentSettings');
-    const saved = result.entailmentSettings as Partial<EntailmentSettings> | undefined;
+  async getResearchSettings(): Promise<ResearchSettings> {
+    const result = await chrome.storage.local.get('researchSettings');
+    const saved = result.researchSettings as Partial<ResearchSettings> | undefined;
     return {
-      ...DEFAULT_ENTAILMENT_SETTINGS,
+      ...DEFAULT_RESEARCH_SETTINGS,
       ...(saved || {}),
     };
   },
 
   /**
-   * Store entailment settings
+   * Store research settings
    */
-  async setEntailmentSettings(settings: EntailmentSettings): Promise<void> {
-    await chrome.storage.local.set({ entailmentSettings: settings });
+  async setResearchSettings(settings: ResearchSettings): Promise<void> {
+    await chrome.storage.local.set({ researchSettings: settings });
+  },
+
+  /**
+   * Read the running estimate of Tavily credits consumed by this extension.
+   */
+  async getCreditsUsed(): Promise<number> {
+    const result = await chrome.storage.local.get('creditsUsed');
+    const value = result.creditsUsed;
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  },
+
+  /**
+   * Add to the credit counter and return the new total.
+   */
+  async addCreditsUsed(amount: number): Promise<number> {
+    const current = await this.getCreditsUsed();
+    const next = current + Math.max(0, Math.round(amount));
+    await chrome.storage.local.set({ creditsUsed: next });
+    return next;
+  },
+
+  /**
+   * Reset the credit counter back to zero.
+   */
+  async resetCreditsUsed(): Promise<void> {
+    await chrome.storage.local.set({ creditsUsed: 0 });
   },
 };
