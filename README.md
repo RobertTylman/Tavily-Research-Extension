@@ -131,11 +131,6 @@ npm run test        # vitest run
 npm run build       # typecheck + vite build + postbuild copy
 ```
 
-> **Note on the pre-commit hook:** the current `eslint@8.57.1` +
-> `@typescript-eslint/eslint-plugin@8.x` combination hangs on config load.
-> Until that's resolved (either upgrade ESLint to 9.x or pin the plugins back
-> to 7.x), `git commit --no-verify` is the working path.
-
 ## Security
 
 - The Tavily API key is read and used only by the background service worker —
