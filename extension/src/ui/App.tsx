@@ -108,131 +108,6 @@ export default function App() {
     });
   }, [state, pageCheck, inputText, showSettings, expandedClaimId, hasApiKey]);
 
-  /**
-   * MOUNT: load settings, pending verifications, and restored session state.
-   */
-  useEffect(() => {
-    // 1. Initial configuration checks
-    checkApiKey();
-    checkForPendingVerification();
-
-    // 2. Load saved session state
-    chrome.storage.session.get('lastUiState').then((result) => {
-      if (result.lastUiState) {
-        const {
-          state: savedState,
-          pageCheck: savedPageCheck,
-          inputText: savedInputText,
-          showSettings: savedShowSettings,
-          expandedClaimId: savedExpandedClaimId,
-        } = result.lastUiState;
-
-        if (savedState) setState(savedState);
-        if (savedPageCheck) setPageCheck(savedPageCheck);
-        if (savedInputText) setInputText(savedInputText);
-        // Only restore settings view if we have an API key
-        if (savedShowSettings !== undefined) setShowSettings(savedShowSettings);
-        if (savedExpandedClaimId) setExpandedClaimId(savedExpandedClaimId);
-      } else {
-        // Only load selected text if we don't have a restored session
-        loadSelectedText();
-      }
-    });
-  }, []);
-
-  // Subscribe to live research status events from the background worker.
-  useEffect(() => {
-    const handler = (message: ExtensionMessage) => {
-      if (message?.type === 'RESEARCH_STATUS') {
-        setLatestStatus(message.status);
-      } else if (message?.type === 'FACT_CHECK_PAGE_PROGRESS') {
-        setPageCheck((prev) => ({
-          ...prev,
-          status: message.progress.stage === 'complete' ? prev.status : 'running',
-          progress: message.progress,
-        }));
-      } else if (message?.type === 'FACT_CHECK_PAGE_CLAIMS') {
-        setPageCheck((prev) => ({
-          ...prev,
-          status: 'running',
-          entries: message.claims.map((claim) => ({ claim })),
-        }));
-      } else if (message?.type === 'FACT_CHECK_PAGE_VERDICT') {
-        setPageCheck((prev) => ({
-          ...prev,
-          entries: prev.entries.map((entry) =>
-            entry.claim.id === message.claim.id ? { ...entry, verdict: message.verdict } : entry
-          ),
-        }));
-      } else if (message?.type === 'FACT_CHECK_PAGE_DONE') {
-        setPageCheck((prev) => ({ ...prev, status: 'complete' }));
-      } else if (message?.type === 'FACT_CHECK_PAGE_ERROR') {
-        setPageCheck((prev) => ({ ...prev, status: 'error', error: message.error }));
-      }
-    };
-    chrome.runtime.onMessage.addListener(handler);
-    return () => chrome.runtime.onMessage.removeListener(handler);
-  }, []);
-
-  /**
-   * Check if API key is configured
-   */
-  const checkApiKey = async () => {
-    try {
-      const response = await sendToBackground<{ hasKey: boolean }>({ type: 'GET_API_KEY' });
-      setHasApiKey(response.hasKey);
-      if (!response.hasKey) {
-        setShowSettings(true);
-      }
-    } catch (error) {
-      console.error('Failed to check API key:', error);
-      setHasApiKey(false);
-      setShowSettings(true);
-    }
-  };
-
-  /**
-   * Check for pending verification from context menu
-   */
-  const checkForPendingVerification = async () => {
-    try {
-      const result = await chrome.storage.session.get('pendingVerification');
-      if (result.pendingVerification) {
-        const { text, timestamp } = result.pendingVerification;
-        // Only use if less than 30 seconds old
-        if (Date.now() - timestamp < 30000) {
-          setInputText(text);
-          // Clear the pending verification
-          await chrome.storage.session.remove('pendingVerification');
-          // Auto-start verification
-          handleVerify(text);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to check pending verification:', error);
-    }
-  };
-
-  /**
-   * Load selected text from the active tab
-   */
-  const loadSelectedText = async () => {
-    try {
-      const response = await sendToContentScript<{ text: string | null }>({
-        type: 'GET_SELECTED_TEXT',
-      });
-      if (response.text) {
-        setInputText(response.text);
-      }
-    } catch (error) {
-      // Content script might not be loaded yet, ignore
-      console.log('Could not get selected text:', error);
-    }
-  };
-
-  /**
-   * Handle verification request
-   */
   const handleVerify = useCallback(
     async (text?: string) => {
       const textToVerify = text || inputText;
@@ -289,6 +164,150 @@ export default function App() {
     },
     [inputText]
   );
+
+  const checkApiKey = useCallback(async () => {
+    try {
+      const response = await sendToBackground<{ hasKey: boolean }>({ type: 'GET_API_KEY' });
+      setHasApiKey(response.hasKey);
+      if (!response.hasKey) {
+        setShowSettings(true);
+      }
+    } catch (error) {
+      console.error('Failed to check API key:', error);
+      setHasApiKey(false);
+      setShowSettings(true);
+    }
+  }, []);
+
+  const loadSelectedText = useCallback(async () => {
+    try {
+      const response = await sendToContentScript<{ text: string | null }>({
+        type: 'GET_SELECTED_TEXT',
+      });
+      if (response.text) {
+        setInputText(response.text);
+      }
+    } catch (error) {
+      // Content script might not be loaded yet, ignore
+      console.log('Could not get selected text:', error);
+    }
+  }, []);
+
+  const checkForPendingVerification = useCallback(async () => {
+    try {
+      const result = await chrome.storage.session.get('pendingVerification');
+      if (result.pendingVerification) {
+        const { text, timestamp } = result.pendingVerification;
+        // Only use if less than 30 seconds old
+        if (Date.now() - timestamp < 30000) {
+          setInputText(text);
+          // Clear the pending verification
+          await chrome.storage.session.remove('pendingVerification');
+          // Auto-start verification
+          handleVerify(text);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to check pending verification:', error);
+    }
+  }, [handleVerify]);
+
+  /**
+   * MOUNT: load settings, pending verifications, and restored session state.
+   */
+  useEffect(() => {
+    // 1. Initial configuration checks
+    checkApiKey();
+    checkForPendingVerification();
+
+    // 2. Load saved session state
+    chrome.storage.session.get('lastUiState').then((result) => {
+      if (result.lastUiState) {
+        const {
+          state: savedState,
+          pageCheck: savedPageCheck,
+          inputText: savedInputText,
+          showSettings: savedShowSettings,
+          expandedClaimId: savedExpandedClaimId,
+        } = result.lastUiState;
+
+        if (savedState) setState(savedState);
+        if (savedPageCheck) setPageCheck(savedPageCheck);
+        if (savedInputText) setInputText(savedInputText);
+        // Only restore settings view if we have an API key
+        if (savedShowSettings !== undefined) setShowSettings(savedShowSettings);
+        if (savedExpandedClaimId) setExpandedClaimId(savedExpandedClaimId);
+      } else {
+        // Only load selected text if we don't have a restored session
+        loadSelectedText();
+      }
+    });
+  }, [checkApiKey, checkForPendingVerification, loadSelectedText]);
+
+  // Subscribe to live research status events from the background worker.
+  useEffect(() => {
+    const handler = (message: ExtensionMessage) => {
+      if (message?.type === 'RESEARCH_STATUS') {
+        setLatestStatus(message.status);
+      } else if (message?.type === 'FACT_CHECK_PAGE_PROGRESS') {
+        setPageCheck((prev) => ({
+          ...prev,
+          status: message.progress.stage === 'complete' ? prev.status : 'running',
+          progress: message.progress,
+        }));
+      } else if (message?.type === 'FACT_CHECK_PAGE_CLAIMS') {
+        setPageCheck((prev) => ({
+          ...prev,
+          status: 'running',
+          entries: message.claims.map((claim) => ({ claim })),
+        }));
+      } else if (message?.type === 'FACT_CHECK_PAGE_VERDICT') {
+        setPageCheck((prev) => ({
+          ...prev,
+          entries: prev.entries.map((entry) =>
+            entry.claim.id === message.claim.id ? { ...entry, verdict: message.verdict } : entry
+          ),
+        }));
+      } else if (message?.type === 'FACT_CHECK_PAGE_DONE') {
+        setPageCheck((prev) => ({ ...prev, status: 'complete' }));
+      } else if (message?.type === 'FACT_CHECK_PAGE_ERROR') {
+        setPageCheck((prev) => ({ ...prev, status: 'error', error: message.error }));
+      }
+    };
+    chrome.runtime.onMessage.addListener(handler);
+    return () => chrome.runtime.onMessage.removeListener(handler);
+  }, []);
+
+  const [researchStartTime, setResearchStartTime] = useState<number | null>(null);
+  const [displayElapsed, setDisplayElapsed] = useState(0);
+
+  /**
+   * Continuous Monotonic Timer Effect:
+   * Uses a local startTime reference to calculate elapsed time.
+   * This ensures the timer never "jumps" or decreases, even if background
+   * messages arrive slightly out of sync.
+   */
+  useEffect(() => {
+    let interval: number;
+    const isLoading =
+      state.status === 'extracting' || state.status === 'searching' || state.status === 'analyzing';
+
+    if (isLoading) {
+      if (!researchStartTime) {
+        setResearchStartTime(Date.now());
+      }
+      interval = window.setInterval(() => {
+        if (researchStartTime) {
+          setDisplayElapsed(Math.floor((Date.now() - researchStartTime) / 1000));
+        }
+      }, 100); // High-frequency check for 1s transitions
+    } else {
+      setResearchStartTime(null);
+      setDisplayElapsed(0);
+    }
+
+    return () => window.clearInterval(interval);
+  }, [state.status, researchStartTime]);
 
   /**
    * Handle API key save
@@ -602,9 +621,7 @@ export default function App() {
           <p className="loading-text" key={latestStatus?.message ?? 'init'}>
             {latestStatus?.message ?? 'Preparing research request…'}
           </p>
-          <p className="loading-elapsed">
-            {latestStatus ? `${latestStatus.elapsedSeconds}s elapsed` : 'Starting up…'}
-          </p>
+          <p className="loading-elapsed">{displayElapsed}s elapsed</p>
         </div>
       )}
 
