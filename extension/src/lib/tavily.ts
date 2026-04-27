@@ -55,7 +55,7 @@ const STRUCTURED_OUTPUT_SCHEMA: Record<string, unknown> = {
       minimum: 0,
       maximum: 1,
       description:
-        'Calibrated confidence in the verdict between 0 and 1. Stay under 0.9 unless the evidence is overwhelming.',
+        'Calibrated confidence in the verdict between 0 and 1. Use 1.0 for definitively proven facts and lower values when sources conflict or are ambiguous.',
     },
     summary: {
       type: 'string',
@@ -513,7 +513,7 @@ function sanitizeConfidence(value: unknown): number {
     return 0.3;
   }
   const normalized = value > 1 ? value / 100 : value;
-  return Math.max(0, Math.min(0.95, normalized));
+  return Math.max(0, Math.min(1.0, normalized));
 }
 
 function buildResearchPrompt(claim: Claim): string {

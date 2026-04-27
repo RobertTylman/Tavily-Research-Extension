@@ -59,6 +59,30 @@ Tavily returns the verdict label, a 0–1 confidence score, a one-sentence
 summary, a longer explanation, and a markdown report containing inline
 citations.
 
+## How It Works
+
+The extension uses a multi-stage pipeline to verify information, leveraging LLMs for identification and Tavily for deep web research.
+
+### Step 1: Content Extraction (`/extract`)
+When you click **"Fact-Check This Page"**, the extension sends the current URL to Tavily's `/extract` endpoint. This allows the system to:
+*   Bypass the complex DOM of the local page and work with a clean, Markdown-formatted version of the article.
+*   Strip away "noise" like navigation bars, advertisements, and footers that can confuse AI models.
+*   Ensure the fact-checking logic is focused only on the core substance of the article.
+
+### Step 2: Claim Identification (LLM)
+The "cleaned" text is sent to your selected LLM provider (Claude or GPT-4o-mini). The model acts as a "Gatekeeper" to find **check-worthy claims**. 
+*   It looks for specific, verifiable facts (numbers, dates, names).
+*   It ignores opinions, analysis, and trivial truths.
+*   It transforms vague sentences into **self-contained research queries** so they can be verified independently of the original context.
+
+### Step 3: Deep Research (`/research`)
+Each identified claim is sent to Tavily’s `/research` endpoint. This is the "Truth Engine" of the extension:
+*   **Multi-Source Search:** The research agent performs multiple targeted web searches across reputable sources (news wire services, academic databases, and government reports).
+*   **Information Synthesis:** It cross-references these sources to find points of agreement or contradiction.
+*   **Structured Verdict:** Instead of just returning search results, it returns a structured JSON object containing a definitive verdict, a calibrated confidence score (0-100%), a detailed explanation, and a full Markdown report with inline citations.
+
+---
+
 ## Architecture
 
 ```

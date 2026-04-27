@@ -1009,13 +1009,40 @@ select.api-key-input {
 
 .page-claim-row {
   display: flex;
-  gap: var(--space-3);
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 0;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--bg-card);
-  padding: var(--space-3);
+  padding: 0;
   box-shadow: var(--shadow-sm);
+  transition: all 200ms ease;
+  overflow: hidden;
+}
+
+.page-claim-row--clickable {
+  cursor: pointer;
+}
+
+.page-claim-row--clickable:hover {
+  border-color: var(--brand);
+  background: var(--bg-subtle);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.page-claim-row--expanded {
+  border-color: var(--brand);
+  background: var(--bg-card);
+  transform: none;
+  box-shadow: var(--shadow-md);
+}
+
+.page-claim-summary {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3);
 }
 
 .page-claim-dot {
@@ -1071,10 +1098,60 @@ select.api-key-input {
   font-size: var(--fs-xs);
   color: var(--text-muted);
   line-height: 1.4;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.expand-hint {
+  color: var(--brand);
+  font-weight: 500;
 }
 
 .page-claim-meta--pending {
   font-style: italic;
+}
+
+.page-claim-details {
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-subtle);
+  padding: var(--space-3);
+}
+
+.page-claim-details .confidence-section {
+  margin-bottom: var(--space-3);
+}
+
+.page-claim-details .explanation {
+  margin-bottom: var(--space-3);
+}
+
+.citations-section {
+  margin-top: var(--space-4);
+}
+
+.citations-heading {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+}
+
+.animate-expand {
+  animation: slide-down 240ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* ============================================================================

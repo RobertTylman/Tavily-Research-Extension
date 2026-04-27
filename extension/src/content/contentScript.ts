@@ -624,6 +624,7 @@ function ensureStyles(): void {
     .${TOOLTIP_CLASS}__header--gray   strong { color: #616161; }
     .${TOOLTIP_CLASS}__confidence {
       margin-left: auto;
+      margin-right: 18px;
       font-size: 11px;
       color: #777;
       font-weight: 600;

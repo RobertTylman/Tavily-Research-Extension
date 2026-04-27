@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { Claim, Verdict } from '../../lib/types';
 import { VerdictBadge } from './VerdictBadge';
 import { CitationList } from './CitationList';
+import { getTierColor, getVerdictTier } from '../../lib/verdictEngine';
 
 interface ClaimCardProps {
   claim: Claim;
@@ -37,7 +38,7 @@ export function ClaimCard({ claim, verdict }: ClaimCardProps) {
                 className="confidence-fill"
                 style={{
                   width: `${verdict.confidence * 100}%`,
-                  backgroundColor: getConfidenceColor(verdict.confidence),
+                  backgroundColor: getTierColor(getVerdictTier(verdict)),
                 }}
               />
             </div>
@@ -73,10 +74,4 @@ export function ClaimCard({ claim, verdict }: ClaimCardProps) {
       )}
     </div>
   );
-}
-
-function getConfidenceColor(confidence: number): string {
-  if (confidence >= 0.7) return '#22c55e';
-  if (confidence >= 0.4) return '#f59e0b';
-  return '#6b7280';
 }

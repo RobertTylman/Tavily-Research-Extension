@@ -17,10 +17,12 @@ import {
   VerificationState,
 } from '../lib/types';
 import { sendToBackground, sendToContentScript } from '../utils/messaging';
-import { ClaimCard } from './components/ClaimCard';
 import { ApiKeyInput } from './components/ApiKeyInput';
+import { ClaimCard } from './components/ClaimCard';
 import { Header } from './components/Header';
+import { getTierColor, getVerdictTier } from '../lib/verdictEngine';
 import { Icons } from './icons';
+import { CitationList } from './components/CitationList';
 
 /**
  * Main application state
@@ -59,6 +61,7 @@ export default function App() {
   const [latestStatus, setLatestStatus] = useState<ResearchStatus | null>(null);
   const [shareState, setShareState] = useState<'idle' | 'copied' | 'error'>('idle');
   const [pageCheck, setPageCheck] = useState<PageCheckState>(initialPageCheck);
+  const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
 
   // Theme state initialization
   const [theme, setTheme] = useState<Theme>(() => {
@@ -87,12 +90,54 @@ export default function App() {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
 
-  // Check for API key on mount
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  /**
+   * PERSISTENCE: Save UI state to session storage whenever it changes.
+   * This prevents the extension from resetting if the user clicks out.
+   */
   useEffect(() => {
+    if (hasApiKey === null) return; // Don't save initial state before load
+
+    chrome.storage.session.set({
+      lastUiState: {
+        state,
+        pageCheck,
+        inputText,
+        showSettings,
+        expandedClaimId,
+      },
+    });
+  }, [state, pageCheck, inputText, showSettings, expandedClaimId, hasApiKey]);
+
+  /**
+   * MOUNT: load settings, pending verifications, and restored session state.
+   */
+  useEffect(() => {
+    // 1. Initial configuration checks
     checkApiKey();
     checkForPendingVerification();
-    loadSelectedText();
+
+    // 2. Load saved session state
+    chrome.storage.session.get('lastUiState').then((result) => {
+      if (result.lastUiState) {
+        const {
+          state: savedState,
+          pageCheck: savedPageCheck,
+          inputText: savedInputText,
+          showSettings: savedShowSettings,
+          expandedClaimId: savedExpandedClaimId,
+        } = result.lastUiState;
+
+        if (savedState) setState(savedState);
+        if (savedPageCheck) setPageCheck(savedPageCheck);
+        if (savedInputText) setInputText(savedInputText);
+        // Only restore settings view if we have an API key
+        if (savedShowSettings !== undefined) setShowSettings(savedShowSettings);
+        if (savedExpandedClaimId) setExpandedClaimId(savedExpandedClaimId);
+      } else {
+        // Only load selected text if we don't have a restored session
+        loadSelectedText();
+      }
+    });
   }, []);
 
   // Subscribe to live research status events from the background worker.
@@ -306,6 +351,10 @@ export default function App() {
     }
   };
 
+  const handleToggleExpand = (id: string) => {
+    setExpandedClaimId((prev) => (prev === id ? null : id));
+  };
+
   const handleClearPageCheck = async () => {
     try {
       await sendToContentScript({ type: 'CLEAR_ANNOTATIONS' });
@@ -460,25 +509,80 @@ export default function App() {
 
           {pageCheck.entries.length > 0 && (
             <ul className="page-claim-list">
-              {pageCheck.entries.map((entry) => (
-                <li key={entry.claim.id} className="page-claim-row">
-                  <span
-                    className={`page-claim-dot page-claim-dot--${verdictTier(entry.verdict)}`}
-                    aria-hidden="true"
-                  />
-                  <div className="page-claim-text">
-                    <div className="page-claim-headline">{entry.claim.text}</div>
-                    {entry.verdict ? (
-                      <div className="page-claim-meta">
-                        {entry.verdict.verdict} · {Math.round(entry.verdict.confidence * 100)}%
-                        {entry.verdict.summary ? ` · ${entry.verdict.summary}` : ''}
+              {pageCheck.entries.map((entry) => {
+                const isExpanded = expandedClaimId === entry.claim.id;
+                return (
+                  <li
+                    key={entry.claim.id}
+                    className={`page-claim-row ${isExpanded ? 'page-claim-row--expanded' : ''} ${entry.verdict ? 'page-claim-row--clickable' : ''}`}
+                    onClick={() => entry.verdict && handleToggleExpand(entry.claim.id)}
+                    role={entry.verdict ? 'button' : undefined}
+                    tabIndex={entry.verdict ? 0 : undefined}
+                  >
+                    <div className="page-claim-summary">
+                      <span
+                        className={`page-claim-dot page-claim-dot--${getVerdictTier(entry.verdict)}`}
+                        aria-hidden="true"
+                      />
+                      <div className="page-claim-text">
+                        <div className="page-claim-headline">{entry.claim.text}</div>
+                        {entry.verdict ? (
+                          <div className="page-claim-meta">
+                            {entry.verdict.verdict} · {Math.round(entry.verdict.confidence * 100)}%
+                            <span className="expand-hint">
+                              {isExpanded ? ' · Show less' : ' · Click to read more'}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="page-claim-meta page-claim-meta--pending">
+                            Researching…
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <div className="page-claim-meta page-claim-meta--pending">Researching…</div>
+                    </div>
+
+                    {isExpanded && entry.verdict && (
+                      <div
+                        className="page-claim-details animate-expand"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="confidence-section">
+                          <div className="confidence-label">
+                            <span>Confidence</span>
+                            <span className="confidence-value">
+                              {Math.round(entry.verdict.confidence * 100)}%
+                            </span>
+                          </div>
+                          <div className="confidence-bar">
+                            <div
+                              className="confidence-fill"
+                              style={{
+                                width: `${entry.verdict.confidence * 100}%`,
+                                backgroundColor: getTierColor(getVerdictTier(entry.verdict)),
+                                height: '100%',
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="explanation">
+                          <p>{entry.verdict.explanation}</p>
+                        </div>
+
+                        {entry.verdict.citations.length > 0 && (
+                          <div className="citations-section">
+                            <h4 className="citations-heading">Sources</h4>
+                            <CitationList
+                              citations={entry.verdict.citations}
+                              claimText={entry.claim.text}
+                            />
+                          </div>
+                        )}
+                      </div>
                     )}
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -556,15 +660,6 @@ export default function App() {
       )}
     </div>
   );
-}
-
-function verdictTier(verdict?: Verdict): 'green' | 'yellow' | 'red' | 'gray' | 'pending' {
-  if (!verdict) return 'pending';
-  if (verdict.verdict === 'INSUFFICIENT_EVIDENCE') return 'gray';
-  if (verdict.verdict === 'MISLEADING') return 'yellow';
-  if (verdict.verdict === 'FALSE') return verdict.confidence >= 0.5 ? 'red' : 'yellow';
-  if (verdict.verdict === 'SUPPORTED') return verdict.confidence >= 0.5 ? 'green' : 'yellow';
-  return 'gray';
 }
 
 function formatShareText(claims: Claim[], verdicts: Verdict[]): string {

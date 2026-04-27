@@ -68,7 +68,7 @@ export interface Verdict {
   claimId: string;
   /** The verdict label */
   verdict: VerdictLabel;
-  /** Confidence score 0-1 (capped at 0.9 for epistemic humility) */
+  /** Confidence score 0-1 based on the strength of the evidence */
   confidence: number;
   /** Human-readable explanation of the verdict */
   explanation: string;
