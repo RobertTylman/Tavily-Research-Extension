@@ -335,6 +335,27 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
         <span className="security-icon">🔒</span>
         <span>All keys and settings are stored locally and never sent to our servers.</span>
       </div>
+
+      <div
+        style={{
+          textAlign: 'right',
+          marginTop: '12px',
+          marginRight: '-8px',
+          marginBottom: '-8px',
+          fontSize: '11px',
+          color: 'var(--text-secondary, #808080)',
+        }}
+      >
+        <a
+          href="https://roberttylman.github.io/portfolio-site/"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: 'inherit', textDecoration: 'underline' }}
+        >
+          {' '}
+          Made by Robert Tylman
+        </a>
+      </div>
     </div>
   );
 }

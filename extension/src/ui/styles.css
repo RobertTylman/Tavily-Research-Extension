@@ -95,6 +95,7 @@ body {
   overflow: hidden;
   background: var(--bg-app);
   backdrop-filter: blur(8px);
+  position: relative;
 }
 
 .input-section,
