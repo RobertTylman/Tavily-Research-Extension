@@ -9,6 +9,8 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Claim,
   ExtensionMessage,
+  PageClaim,
+  PageFactCheckProgress,
   ResearchSettings,
   ResearchStatus,
   Verdict,
@@ -18,6 +20,7 @@ import { sendToBackground, sendToContentScript } from '../utils/messaging';
 import { ClaimCard } from './components/ClaimCard';
 import { ApiKeyInput } from './components/ApiKeyInput';
 import { Header } from './components/Header';
+import { Icons } from './icons';
 
 /**
  * Main application state
@@ -31,6 +34,23 @@ const initialState: VerificationState = {
 
 type Theme = 'light' | 'dark';
 
+interface PageCheckEntry {
+  claim: PageClaim;
+  verdict?: Verdict;
+}
+
+interface PageCheckState {
+  status: 'idle' | 'running' | 'complete' | 'error';
+  progress?: PageFactCheckProgress;
+  entries: PageCheckEntry[];
+  error?: string;
+}
+
+const initialPageCheck: PageCheckState = {
+  status: 'idle',
+  entries: [],
+};
+
 export default function App() {
   const [state, setState] = useState<VerificationState>(initialState);
   const [inputText, setInputText] = useState('');
@@ -38,6 +58,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [latestStatus, setLatestStatus] = useState<ResearchStatus | null>(null);
   const [shareState, setShareState] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [pageCheck, setPageCheck] = useState<PageCheckState>(initialPageCheck);
 
   // Theme state initialization
   const [theme, setTheme] = useState<Theme>(() => {
@@ -79,6 +100,29 @@ export default function App() {
     const handler = (message: ExtensionMessage) => {
       if (message?.type === 'RESEARCH_STATUS') {
         setLatestStatus(message.status);
+      } else if (message?.type === 'FACT_CHECK_PAGE_PROGRESS') {
+        setPageCheck((prev) => ({
+          ...prev,
+          status: message.progress.stage === 'complete' ? prev.status : 'running',
+          progress: message.progress,
+        }));
+      } else if (message?.type === 'FACT_CHECK_PAGE_CLAIMS') {
+        setPageCheck((prev) => ({
+          ...prev,
+          status: 'running',
+          entries: message.claims.map((claim) => ({ claim })),
+        }));
+      } else if (message?.type === 'FACT_CHECK_PAGE_VERDICT') {
+        setPageCheck((prev) => ({
+          ...prev,
+          entries: prev.entries.map((entry) =>
+            entry.claim.id === message.claim.id ? { ...entry, verdict: message.verdict } : entry
+          ),
+        }));
+      } else if (message?.type === 'FACT_CHECK_PAGE_DONE') {
+        setPageCheck((prev) => ({ ...prev, status: 'complete' }));
+      } else if (message?.type === 'FACT_CHECK_PAGE_ERROR') {
+        setPageCheck((prev) => ({ ...prev, status: 'error', error: message.error }));
       }
     };
     chrome.runtime.onMessage.addListener(handler);
@@ -243,6 +287,36 @@ export default function App() {
   };
 
   /**
+   * Kick off the page-fact-checker pipeline in the background worker.
+   */
+  const handleFactCheckPage = async () => {
+    setPageCheck({
+      status: 'running',
+      entries: [],
+      progress: { stage: 'extracting', message: 'Starting…' },
+    });
+    try {
+      await sendToBackground({ type: 'FACT_CHECK_PAGE' });
+    } catch (error) {
+      setPageCheck({
+        status: 'error',
+        entries: [],
+        error: error instanceof Error ? error.message : 'Failed to start page fact check.',
+      });
+    }
+  };
+
+  const handleClearPageCheck = async () => {
+    try {
+      await sendToContentScript({ type: 'CLEAR_ANNOTATIONS' });
+    } catch (error) {
+      // Active tab may not have a content script — ignore.
+      console.log('Could not clear annotations:', error);
+    }
+    setPageCheck(initialPageCheck);
+  };
+
+  /**
    * Copy a shareable summary of the results to the clipboard.
    * Falls back to navigator.share if clipboard is unavailable.
    */
@@ -309,7 +383,7 @@ export default function App() {
       />
 
       {/* Input Section */}
-      {state.status === 'idle' && (
+      {state.status === 'idle' && pageCheck.status === 'idle' && (
         <div className="input-section">
           <textarea
             className="text-input"
@@ -325,6 +399,88 @@ export default function App() {
           >
             Verify Claims
           </button>
+
+          <div className="mode-divider">
+            <span>or</span>
+          </div>
+
+          <button
+            className="page-check-button"
+            onClick={handleFactCheckPage}
+            title="Run /extract on the current tab, identify claims, and annotate them inline"
+          >
+            <Icons.ShieldCheck className="page-check-icon" aria-hidden="true" />
+            <span>Fact-Check This Page</span>
+          </button>
+          <p className="page-check-hint">
+            Extracts the article you're reading, finds check-worthy claims, and shows traffic-light
+            verdicts inline on the page.
+          </p>
+        </div>
+      )}
+
+      {/* Page Fact Checker view */}
+      {pageCheck.status !== 'idle' && (
+        <div className="results-section">
+          <div className="results-header">
+            <h2>Page Fact Check</h2>
+            <div className="results-actions">
+              <button className="new-check-button" onClick={handleClearPageCheck}>
+                {pageCheck.status === 'running' ? 'Cancel' : 'Clear'}
+              </button>
+            </div>
+          </div>
+
+          {pageCheck.progress && (
+            <div className="page-check-progress">
+              <div className="loading-stage-label">
+                {pageCheck.progress.stage.replace(/-/g, ' ')}
+              </div>
+              {pageCheck.status === 'running' && (
+                <div className="loading-bar indeterminate" aria-label="Page fact check in progress">
+                  <div className="loading-bar-track" />
+                </div>
+              )}
+              <p className="loading-text">{pageCheck.progress.message}</p>
+              {pageCheck.progress.claimsTotal != null && (
+                <p className="loading-elapsed">
+                  {pageCheck.progress.claimsCompleted ?? 0} / {pageCheck.progress.claimsTotal}{' '}
+                  researched
+                </p>
+              )}
+            </div>
+          )}
+
+          {pageCheck.status === 'error' && (
+            <div className="error-section">
+              <div className="error-icon">⚠️</div>
+              <p className="error-message">{pageCheck.error}</p>
+            </div>
+          )}
+
+          {pageCheck.entries.length > 0 && (
+            <ul className="page-claim-list">
+              {pageCheck.entries.map((entry) => (
+                <li key={entry.claim.id} className="page-claim-row">
+                  <span
+                    className={`page-claim-dot page-claim-dot--${verdictTier(entry.verdict)}`}
+                    aria-hidden="true"
+                  />
+                  <div className="page-claim-text">
+                    <div className="page-claim-headline">{entry.claim.text}</div>
+                    {entry.verdict ? (
+                      <div className="page-claim-meta">
+                        {entry.verdict.verdict} · {Math.round(entry.verdict.confidence * 100)}%
+                        {entry.verdict.summary ? ` · ${entry.verdict.summary}` : ''}
+                      </div>
+                    ) : (
+                      <div className="page-claim-meta page-claim-meta--pending">Researching…</div>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -400,6 +556,15 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function verdictTier(verdict?: Verdict): 'green' | 'yellow' | 'red' | 'gray' | 'pending' {
+  if (!verdict) return 'pending';
+  if (verdict.verdict === 'INSUFFICIENT_EVIDENCE') return 'gray';
+  if (verdict.verdict === 'MISLEADING') return 'yellow';
+  if (verdict.verdict === 'FALSE') return verdict.confidence >= 0.5 ? 'red' : 'yellow';
+  if (verdict.verdict === 'SUPPORTED') return verdict.confidence >= 0.5 ? 'green' : 'yellow';
+  return 'gray';
 }
 
 function formatShareText(claims: Claim[], verdicts: Verdict[]): string {

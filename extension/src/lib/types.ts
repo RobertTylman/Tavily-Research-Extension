@@ -178,6 +178,38 @@ export interface ResearchStatus {
 }
 
 // ============================================================================
+// PAGE FACT-CHECKER TYPES
+// ============================================================================
+
+export type LLMProvider = 'anthropic' | 'openai';
+
+/**
+ * A claim extracted by the LLM from a full webpage. Carries both the
+ * canonical research-ready text and the verbatim sentence to find in the DOM.
+ */
+export interface PageClaim {
+  id: string;
+  /** Self-contained restatement suitable for the research agent. */
+  text: string;
+  /** Exact sentence as it appears in the article — used for DOM matching. */
+  originalSentence: string;
+}
+
+export type PageFactCheckStage =
+  | 'extracting'
+  | 'identifying-claims'
+  | 'researching'
+  | 'complete'
+  | 'error';
+
+export interface PageFactCheckProgress {
+  stage: PageFactCheckStage;
+  message: string;
+  claimsTotal?: number;
+  claimsCompleted?: number;
+}
+
+// ============================================================================
 // MESSAGE TYPES (Chrome Extension Communication)
 // ============================================================================
 
@@ -189,6 +221,7 @@ export type ExtensionMessage =
   | { type: 'VERIFY_SELECTED_TEXT' }
   | { type: 'GET_SELECTED_TEXT' }
   | { type: 'SELECTED_TEXT_RESPONSE'; text: string | null }
+  | { type: 'GET_ARTICLE_TEXT' }
   | { type: 'VERIFICATION_STARTED' }
   | { type: 'VERIFICATION_PROGRESS'; stage: string; progress: number }
   | { type: 'VERIFICATION_COMPLETE'; claims: Claim[]; verdicts: Verdict[] }
@@ -198,7 +231,17 @@ export type ExtensionMessage =
   | { type: 'GET_API_KEY' }
   | { type: 'API_KEY_RESPONSE'; hasKey: boolean }
   | { type: 'GET_RESEARCH_SETTINGS' }
-  | { type: 'SET_RESEARCH_SETTINGS'; settings: ResearchSettings };
+  | { type: 'SET_RESEARCH_SETTINGS'; settings: ResearchSettings }
+  | { type: 'SET_LLM_API_KEY'; provider: LLMProvider; apiKey: string }
+  | { type: 'GET_LLM_API_KEY_STATUS' }
+  | { type: 'FACT_CHECK_PAGE' }
+  | { type: 'FACT_CHECK_PAGE_PROGRESS'; progress: PageFactCheckProgress }
+  | { type: 'FACT_CHECK_PAGE_CLAIMS'; claims: PageClaim[] }
+  | { type: 'FACT_CHECK_PAGE_VERDICT'; claim: PageClaim; verdict: Verdict }
+  | { type: 'FACT_CHECK_PAGE_DONE' }
+  | { type: 'FACT_CHECK_PAGE_ERROR'; error: string }
+  | { type: 'ANNOTATE_CLAIM'; claim: PageClaim; verdict: Verdict }
+  | { type: 'CLEAR_ANNOTATIONS' };
 
 // ============================================================================
 // RESEARCH SETTINGS
@@ -207,6 +250,13 @@ export type ExtensionMessage =
 export interface ResearchSettings {
   model: TavilyResearchModel;
   citationFormat: TavilyCitationFormat;
+  llmProvider: LLMProvider;
+  maxClaimsPerPage: number;
+}
+
+export interface LLMKeyStatus {
+  anthropic: boolean;
+  openai: boolean;
 }
 
 /**

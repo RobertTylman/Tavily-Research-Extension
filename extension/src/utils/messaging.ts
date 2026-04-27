@@ -5,11 +5,21 @@
  * Handles communication between popup, content script, and background worker.
  */
 
-import { ExtensionMessage, ResearchSettings } from '../lib/types';
+import { ExtensionMessage, LLMProvider, ResearchSettings } from '../lib/types';
 
 const DEFAULT_RESEARCH_SETTINGS: ResearchSettings = {
   model: 'mini',
   citationFormat: 'numbered',
+  llmProvider: 'anthropic',
+  maxClaimsPerPage: 8,
+};
+
+export const MAX_CLAIMS_MIN = 1;
+export const MAX_CLAIMS_MAX = 15;
+
+const LLM_KEY_STORAGE: Record<LLMProvider, string> = {
+  anthropic: 'anthropicApiKey',
+  openai: 'openaiApiKey',
 };
 
 /**
@@ -119,7 +129,40 @@ export const storage = {
    * Store research settings
    */
   async setResearchSettings(settings: ResearchSettings): Promise<void> {
-    await chrome.storage.local.set({ researchSettings: settings });
+    const clamped: ResearchSettings = {
+      ...settings,
+      maxClaimsPerPage: Math.max(
+        MAX_CLAIMS_MIN,
+        Math.min(MAX_CLAIMS_MAX, Math.round(settings.maxClaimsPerPage))
+      ),
+    };
+    await chrome.storage.local.set({ researchSettings: clamped });
+  },
+
+  async getLlmApiKey(provider: LLMProvider): Promise<string | null> {
+    const key = LLM_KEY_STORAGE[provider];
+    const result = await chrome.storage.local.get(key);
+    const value = result[key];
+    return typeof value === 'string' && value.length > 0 ? value : null;
+  },
+
+  async setLlmApiKey(provider: LLMProvider, apiKey: string): Promise<void> {
+    await chrome.storage.local.set({ [LLM_KEY_STORAGE[provider]]: apiKey });
+  },
+
+  async removeLlmApiKey(provider: LLMProvider): Promise<void> {
+    await chrome.storage.local.remove(LLM_KEY_STORAGE[provider]);
+  },
+
+  async getLlmKeyStatus(): Promise<{ anthropic: boolean; openai: boolean }> {
+    const [anthropic, openai] = await Promise.all([
+      this.getLlmApiKey('anthropic'),
+      this.getLlmApiKey('openai'),
+    ]);
+    return {
+      anthropic: anthropic !== null,
+      openai: openai !== null,
+    };
   },
 
   /**

@@ -12,6 +12,8 @@
  */
 
 import { researchClaim, TavilyError } from '../lib/tavily';
+import { extractPage } from '../lib/extract';
+import { extractClaims, LLMError } from '../lib/llm';
 import {
   checkRateLimit,
   recordRequest,
@@ -20,7 +22,7 @@ import {
 } from '../utils/rateLimiter';
 import { storage } from '../utils/messaging';
 import { getCachedVerdict, cacheVerification } from '../utils/cache';
-import { Claim, Verdict, ExtensionMessage } from '../lib/types';
+import { Claim, ExtensionMessage, PageClaim, PageFactCheckProgress, Verdict } from '../lib/types';
 
 // ============================================================================
 // MESSAGE HANDLING
@@ -62,6 +64,20 @@ async function handleMessage(
     case 'SET_RESEARCH_SETTINGS':
       await storage.setResearchSettings(message.settings);
       return { success: true };
+
+    case 'SET_LLM_API_KEY':
+      await storage.setLlmApiKey(message.provider, message.apiKey);
+      return { success: true };
+
+    case 'GET_LLM_API_KEY_STATUS': {
+      const status = await storage.getLlmKeyStatus();
+      return { status };
+    }
+
+    case 'FACT_CHECK_PAGE':
+      // Kick off in background — popup subscribes to broadcast events.
+      void factCheckCurrentPage();
+      return { started: true };
 
     default:
       return { error: 'Unknown message type' };
@@ -246,6 +262,216 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
   }
 });
+
+// ============================================================================
+// PAGE FACT CHECKER PIPELINE
+// ============================================================================
+
+const RESEARCH_CONCURRENCY = 3;
+
+async function factCheckCurrentPage(): Promise<void> {
+  let activeTabId: number | undefined;
+
+  try {
+    const apiKey = await storage.getApiKey();
+    if (!apiKey) {
+      broadcastPageError('No Tavily API key configured. Add one in settings first.');
+      return;
+    }
+
+    const settings = await storage.getResearchSettings();
+    const llmKey = await storage.getLlmApiKey(settings.llmProvider);
+    if (!llmKey) {
+      broadcastPageError(
+        `No ${settings.llmProvider === 'anthropic' ? 'Anthropic' : 'OpenAI'} API key configured. Add one in settings to use the page fact checker.`
+      );
+      return;
+    }
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.url || !tab.id) {
+      broadcastPageError('Could not detect the active tab.');
+      return;
+    }
+    activeTabId = tab.id;
+
+    if (!/^https?:/i.test(tab.url)) {
+      broadcastPageError('The current page is not a public web page (only http/https supported).');
+      return;
+    }
+
+    // Clear any prior annotations before starting a new pass.
+    sendToTab(activeTabId, { type: 'CLEAR_ANNOTATIONS' });
+
+    broadcastPageProgress({
+      stage: 'extracting',
+      message: 'Extracting article content with Tavily…',
+    });
+
+    const extracted = await extractPage(tab.url, apiKey);
+    await storage.addCreditsUsed(1);
+
+    broadcastPageProgress({
+      stage: 'identifying-claims',
+      message: `Asking ${settings.llmProvider === 'anthropic' ? 'Claude' : 'GPT'} to find check-worthy claims…`,
+    });
+
+    const claims = await extractClaims(extracted.content, {
+      provider: settings.llmProvider,
+      apiKey: llmKey,
+      maxClaims: settings.maxClaimsPerPage,
+    });
+
+    if (claims.length === 0) {
+      broadcastPageProgress({
+        stage: 'complete',
+        message: 'No check-worthy factual claims found on this page.',
+        claimsTotal: 0,
+        claimsCompleted: 0,
+      });
+      broadcast({ type: 'FACT_CHECK_PAGE_DONE' });
+      return;
+    }
+
+    broadcast({ type: 'FACT_CHECK_PAGE_CLAIMS', claims });
+    broadcastPageProgress({
+      stage: 'researching',
+      message: `Researching ${claims.length} claim${claims.length === 1 ? '' : 's'}…`,
+      claimsTotal: claims.length,
+      claimsCompleted: 0,
+    });
+
+    let completed = 0;
+    await runWithConcurrency(claims, RESEARCH_CONCURRENCY, async (pageClaim) => {
+      const verdict = await researchSinglePageClaim(pageClaim, apiKey, settings);
+      completed++;
+
+      broadcast({ type: 'FACT_CHECK_PAGE_VERDICT', claim: pageClaim, verdict });
+      if (activeTabId !== undefined) {
+        sendToTab(activeTabId, { type: 'ANNOTATE_CLAIM', claim: pageClaim, verdict });
+      }
+
+      broadcastPageProgress({
+        stage: 'researching',
+        message: `Researched ${completed}/${claims.length} claim${claims.length === 1 ? '' : 's'}…`,
+        claimsTotal: claims.length,
+        claimsCompleted: completed,
+      });
+    });
+
+    broadcastPageProgress({
+      stage: 'complete',
+      message: `Done — ${claims.length} claim${claims.length === 1 ? '' : 's'} checked.`,
+      claimsTotal: claims.length,
+      claimsCompleted: claims.length,
+    });
+    broadcast({ type: 'FACT_CHECK_PAGE_DONE' });
+  } catch (error) {
+    console.error('[Background] factCheckCurrentPage failed:', error);
+    if (error instanceof TavilyError) {
+      broadcastPageError(`Tavily error [${error.statusCode}]: ${error.message}`);
+    } else if (error instanceof LLMError) {
+      broadcastPageError(`LLM error (${error.provider}): ${error.message}`);
+    } else {
+      broadcastPageError(error instanceof Error ? error.message : 'Unknown error.');
+    }
+  }
+}
+
+async function researchSinglePageClaim(
+  pageClaim: PageClaim,
+  apiKey: string,
+  settings: Awaited<ReturnType<typeof storage.getResearchSettings>>
+): Promise<Verdict> {
+  const claim: Claim = {
+    id: pageClaim.id,
+    text: pageClaim.text,
+    originalText: pageClaim.originalSentence,
+  };
+
+  try {
+    const cached = await getCachedVerdict(claim.text);
+    if (cached) {
+      return { ...cached.verdict, claimId: claim.id };
+    }
+
+    checkRateLimit();
+
+    const verdict = await researchClaim(claim, apiKey, {
+      model: settings.model,
+      citationFormat: settings.citationFormat,
+    });
+    recordRequest();
+
+    const shouldCacheVerdict = !(
+      verdict.verdict === 'INSUFFICIENT_EVIDENCE' && verdict.confidence <= 0.2
+    );
+    if (shouldCacheVerdict) {
+      await cacheVerification(claim, verdict);
+    }
+
+    return verdict;
+  } catch (error) {
+    let explanation: string;
+    if (error instanceof RateLimitError) {
+      explanation = `Rate limited. Wait ${error.waitSeconds}s before re-running.`;
+    } else if (error instanceof TavilyError) {
+      explanation = `Research failed [${error.statusCode}]: ${error.message}`;
+    } else {
+      explanation = error instanceof Error ? error.message : 'Research failed.';
+    }
+    return {
+      claimId: claim.id,
+      verdict: 'INSUFFICIENT_EVIDENCE',
+      confidence: 0,
+      explanation,
+      citations: [],
+    };
+  }
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  let cursor = 0;
+  const runners: Promise<void>[] = [];
+  const advance = async (): Promise<void> => {
+    while (cursor < items.length) {
+      const idx = cursor++;
+      try {
+        await worker(items[idx]);
+      } catch (error) {
+        console.error('[Background] research worker failed:', error);
+      }
+    }
+  };
+  for (let i = 0; i < Math.min(concurrency, items.length); i++) {
+    runners.push(advance());
+  }
+  await Promise.all(runners);
+}
+
+function broadcast(message: ExtensionMessage): void {
+  chrome.runtime.sendMessage(message).catch(() => {
+    // Popup may be closed — broadcasts are best-effort.
+  });
+}
+
+function broadcastPageProgress(progress: PageFactCheckProgress): void {
+  broadcast({ type: 'FACT_CHECK_PAGE_PROGRESS', progress });
+}
+
+function broadcastPageError(error: string): void {
+  broadcast({ type: 'FACT_CHECK_PAGE_ERROR', error });
+}
+
+function sendToTab(tabId: number, message: ExtensionMessage): void {
+  chrome.tabs.sendMessage(tabId, message).catch(() => {
+    // Content script may not be injected on this page (chrome://, file://, etc.).
+  });
+}
 
 // ============================================================================
 // STARTUP

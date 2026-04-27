@@ -1,12 +1,24 @@
 /**
  * API Key Input Component
  *
- * Secure input for Tavily API key configuration.
+ * Settings panel for:
+ *   - Tavily API key (required)
+ *   - LLM provider + API keys (Anthropic / OpenAI) used by the page fact checker
+ *   - Tavily research model + citation format
+ *   - Max claims per page (slider)
+ *
+ * Provider, slider, and dropdown changes auto-save so the user never has to
+ * hit a separate "save" button to make their preference stick.
  */
 
-import { useState, useEffect } from 'react';
-import { ResearchSettings, TavilyCitationFormat, TavilyResearchModel } from '../../lib/types';
-import { storage } from '../../utils/messaging';
+import { useEffect, useRef, useState } from 'react';
+import {
+  LLMProvider,
+  ResearchSettings,
+  TavilyCitationFormat,
+  TavilyResearchModel,
+} from '../../lib/types';
+import { MAX_CLAIMS_MAX, MAX_CLAIMS_MIN, sendToBackground, storage } from '../../utils/messaging';
 import { Icons } from '../icons';
 
 interface ApiKeyInputProps {
@@ -17,91 +29,122 @@ interface ApiKeyInputProps {
 const defaultSettings: ResearchSettings = {
   model: 'mini',
   citationFormat: 'numbered',
+  llmProvider: 'anthropic',
+  maxClaimsPerPage: 8,
 };
 
 export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInputProps) {
+  // Tavily key — single inline field. Shows the stored key (masked) and lets
+  // the user paste a new one to replace it. The Save button only appears
+  // once the value has actually changed.
   const [apiKey, setApiKey] = useState('');
   const [storedKey, setStoredKey] = useState<string | null>(null);
-  const [showStoredKey, setShowStoredKey] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [settings, setSettings] = useState<ResearchSettings>(defaultSettings);
-  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
+  // Settings (research model, citation format, llm provider, max claims)
+  const [settings, setSettings] = useState<ResearchSettings>(defaultSettings);
+  const settingsLoadedRef = useRef(false);
+
+  // LLM keys — single inline field per provider, mirroring the Tavily key UX.
+  const [storedLlmKeys, setStoredLlmKeys] = useState<Record<LLMProvider, string | null>>({
+    anthropic: null,
+    openai: null,
+  });
+  const [llmKeyInputs, setLlmKeyInputs] = useState<Record<LLMProvider, string>>({
+    anthropic: '',
+    openai: '',
+  });
+  const [showLlmKeyInput, setShowLlmKeyInput] = useState<Record<LLMProvider, boolean>>({
+    anthropic: false,
+    openai: false,
+  });
+  const [savingLlm, setSavingLlm] = useState<LLMProvider | null>(null);
+
+  // Initial load
   useEffect(() => {
-    storage.getApiKey().then((key: string | null) => {
+    storage.getApiKey().then((key) => {
       if (key) {
         setStoredKey(key);
+        setApiKey(key);
       }
     });
 
-    storage.getResearchSettings().then((loaded: ResearchSettings) => {
+    storage.getResearchSettings().then((loaded) => {
       setSettings(loaded);
+      // Mark loaded AFTER state is set so the auto-save effect doesn't fire
+      // for the initial load.
+      settingsLoadedRef.current = true;
     });
+
+    Promise.all([storage.getLlmApiKey('anthropic'), storage.getLlmApiKey('openai')]).then(
+      ([anthropic, openai]) => {
+        setStoredLlmKeys({ anthropic, openai });
+        setLlmKeyInputs({ anthropic: anthropic ?? '', openai: openai ?? '' });
+      }
+    );
   }, []);
+
+  // Auto-save research settings whenever they change after initial load.
+  useEffect(() => {
+    if (!settingsLoadedRef.current) return;
+    void onSaveResearchSettings(settings);
+  }, [settings, onSaveResearchSettings]);
 
   const handleApiKeySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!apiKey.trim()) return;
+    const trimmed = apiKey.trim();
+    if (!trimmed || trimmed === storedKey) return;
 
     setIsSaving(true);
     try {
-      await onSaveApiKey(apiKey.trim());
-      setStoredKey(apiKey.trim());
-      setApiKey('');
+      await onSaveApiKey(trimmed);
+      setStoredKey(trimmed);
+      setApiKey(trimmed);
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleSettingsSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSavingSettings(true);
+  const tavilyDirty = apiKey.trim().length > 0 && apiKey.trim() !== storedKey;
+
+  const handleLlmKeySave = async (provider: LLMProvider) => {
+    const value = llmKeyInputs[provider].trim();
+    if (!value || value === storedLlmKeys[provider]) return;
+    setSavingLlm(provider);
     try {
-      await onSaveResearchSettings(settings);
+      await sendToBackground({ type: 'SET_LLM_API_KEY', provider, apiKey: value });
+      setStoredLlmKeys((prev) => ({ ...prev, [provider]: value }));
+      setLlmKeyInputs((prev) => ({ ...prev, [provider]: value }));
     } finally {
-      setIsSavingSettings(false);
+      setSavingLlm(null);
     }
   };
 
-  const maskKey = (key: string) => {
-    if (key.length <= 8) return '••••••••';
-    return key.slice(0, 4) + '••••••••' + key.slice(-4);
+  const isLlmDirty = (provider: LLMProvider) => {
+    const v = llmKeyInputs[provider].trim();
+    return v.length > 0 && v !== storedLlmKeys[provider];
   };
+
+  const providerLabel = (provider: LLMProvider) =>
+    provider === 'anthropic' ? 'Anthropic' : 'OpenAI';
 
   return (
     <div className="api-key-section">
-      <h2>Configure API Key</h2>
+      <h2>Configure API Keys</h2>
       <p className="api-key-description">
-        This extension uses the Tavily Research API for fact-checking.
+        Tavily powers the research; the LLM provider you pick is used to identify check-worthy
+        claims from the current webpage.
       </p>
 
-      {storedKey && (
-        <div className="stored-key-section">
-          <h3>Current API Key</h3>
-          <div className="stored-key-display">
-            <code className="stored-key">{showStoredKey ? storedKey : maskKey(storedKey)}</code>
-            <button
-              type="button"
-              className="toggle-visibility"
-              onClick={() => setShowStoredKey(!showStoredKey)}
-              title={showStoredKey ? 'Hide key' : 'Show key'}
-              aria-label={showStoredKey ? 'Hide key' : 'Show key'}
-            >
-              {showStoredKey ? <Icons.EyeOff width={18} height={18} /> : <Icons.Eye width={18} height={18} />}
-            </button>
-          </div>
-        </div>
-      )}
-
       <form onSubmit={handleApiKeySubmit} className="api-key-form">
-        <h3>{storedKey ? 'Update API Key' : 'Enter API Key'}</h3>
+        <h3>Tavily API Key</h3>
         <div className="input-wrapper">
           <input
             type={showKey ? 'text' : 'password'}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={storedKey ? 'Enter new API key' : 'Enter your Tavily API key'}
+            placeholder="Paste your Tavily API key"
             className="api-key-input"
             autoComplete="off"
           />
@@ -112,27 +155,152 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
             title={showKey ? 'Hide key' : 'Show key'}
             aria-label={showKey ? 'Hide key' : 'Show key'}
           >
-            {showKey ? <Icons.EyeOff width={18} height={18} /> : <Icons.Eye width={18} height={18} />}
+            {showKey ? (
+              <Icons.EyeOff width={18} height={18} />
+            ) : (
+              <Icons.Eye width={18} height={18} />
+            )}
           </button>
         </div>
-
-        <button type="submit" className="save-button" disabled={!apiKey.trim() || isSaving}>
-          {isSaving ? 'Saving...' : storedKey ? 'Update API Key' : 'Save API Key'}
-        </button>
+        {tavilyDirty && (
+          <button type="submit" className="save-button" disabled={isSaving}>
+            {isSaving ? 'Saving…' : storedKey ? 'Replace key' : 'Save key'}
+          </button>
+        )}
       </form>
 
-      <form onSubmit={handleSettingsSubmit} className="api-key-form">
-        <h3>Research Settings</h3>
+      <div className="api-key-form">
+        <h3>Page Fact Checker</h3>
         <p className="api-key-description">
-          Choose the Tavily research model and citation format used when generating fact-check
-          reports.
+          Pick the LLM that identifies check-worthy claims from the article. You only need a key for
+          the provider you want to use. Settings save automatically.
         </p>
+
+        <div className="provider-radio-group" role="radiogroup" aria-label="Preferred LLM provider">
+          <label
+            className={`provider-radio ${settings.llmProvider === 'anthropic' ? 'active' : ''}`}
+          >
+            <input
+              type="radio"
+              name="llm-provider"
+              value="anthropic"
+              checked={settings.llmProvider === 'anthropic'}
+              onChange={() => setSettings((prev) => ({ ...prev, llmProvider: 'anthropic' }))}
+            />
+            <span className="provider-radio-name">Claude</span>
+            {storedLlmKeys.anthropic && (
+              <span
+                className="key-check"
+                title="API key configured"
+                aria-label="API key configured"
+              >
+                ✓
+              </span>
+            )}
+          </label>
+          <label className={`provider-radio ${settings.llmProvider === 'openai' ? 'active' : ''}`}>
+            <input
+              type="radio"
+              name="llm-provider"
+              value="openai"
+              checked={settings.llmProvider === 'openai'}
+              onChange={() => setSettings((prev) => ({ ...prev, llmProvider: 'openai' }))}
+            />
+            <span className="provider-radio-name">GPT</span>
+            {storedLlmKeys.openai && (
+              <span
+                className="key-check"
+                title="API key configured"
+                aria-label="API key configured"
+              >
+                ✓
+              </span>
+            )}
+          </label>
+        </div>
+
+        {(() => {
+          const provider = settings.llmProvider;
+          const dirty = isLlmDirty(provider);
+          return (
+            <div key={provider} className="llm-key-block">
+              <div className="llm-key-block-header">{providerLabel(provider)} key</div>
+              <div className="llm-key-row">
+                <div className="input-wrapper">
+                  <input
+                    type={showLlmKeyInput[provider] ? 'text' : 'password'}
+                    value={llmKeyInputs[provider]}
+                    onChange={(e) =>
+                      setLlmKeyInputs((prev) => ({ ...prev, [provider]: e.target.value }))
+                    }
+                    placeholder={`Paste ${providerLabel(provider)} API key`}
+                    className="api-key-input"
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    className="toggle-visibility"
+                    onClick={() =>
+                      setShowLlmKeyInput((prev) => ({ ...prev, [provider]: !prev[provider] }))
+                    }
+                    aria-label={showLlmKeyInput[provider] ? 'Hide key' : 'Show key'}
+                  >
+                    {showLlmKeyInput[provider] ? (
+                      <Icons.EyeOff width={18} height={18} />
+                    ) : (
+                      <Icons.Eye width={18} height={18} />
+                    )}
+                  </button>
+                </div>
+                {dirty && (
+                  <button
+                    type="button"
+                    className="save-button save-button-secondary"
+                    disabled={savingLlm === provider}
+                    onClick={() => handleLlmKeySave(provider)}
+                  >
+                    {savingLlm === provider
+                      ? 'Saving…'
+                      : storedLlmKeys[provider]
+                        ? 'Replace'
+                        : 'Save'}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        <div className="claims-slider">
+          <div className="claims-slider-label">
+            <span>Max claims per page</span>
+            <span className="claims-slider-value">{settings.maxClaimsPerPage}</span>
+          </div>
+          <input
+            type="range"
+            min={MAX_CLAIMS_MIN}
+            max={MAX_CLAIMS_MAX}
+            step={1}
+            value={settings.maxClaimsPerPage}
+            onChange={(e) =>
+              setSettings((prev) => ({ ...prev, maxClaimsPerPage: Number(e.target.value) }))
+            }
+            className="timeline-slider"
+            aria-label="Max claims per page"
+          />
+          <div className="claims-slider-scale">
+            <span>{MAX_CLAIMS_MIN}</span>
+            <span>{MAX_CLAIMS_MAX}</span>
+          </div>
+        </div>
+
+        <h3 style={{ marginTop: 12 }}>Tavily Research</h3>
         <div className="input-wrapper">
           <select
             className="api-key-input"
             value={settings.model}
             onChange={(e) =>
-              setSettings((prev: ResearchSettings) => ({
+              setSettings((prev) => ({
                 ...prev,
                 model: e.target.value as TavilyResearchModel,
               }))
@@ -149,7 +317,7 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
             className="api-key-input"
             value={settings.citationFormat}
             onChange={(e) =>
-              setSettings((prev: ResearchSettings) => ({
+              setSettings((prev) => ({
                 ...prev,
                 citationFormat: e.target.value as TavilyCitationFormat,
               }))
@@ -161,11 +329,7 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
             <option value="chicago">Chicago</option>
           </select>
         </div>
-
-        <button type="submit" className="save-button" disabled={isSavingSettings}>
-          {isSavingSettings ? 'Saving...' : 'Save Research Settings'}
-        </button>
-      </form>
+      </div>
 
       <div className="security-note">
         <span className="security-icon">🔒</span>
