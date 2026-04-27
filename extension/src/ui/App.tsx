@@ -271,7 +271,12 @@ export default function App() {
       } else if (message?.type === 'FACT_CHECK_PAGE_DONE') {
         setPageCheck((prev) => ({ ...prev, status: 'complete' }));
       } else if (message?.type === 'FACT_CHECK_PAGE_ERROR') {
-        setPageCheck((prev) => ({ ...prev, status: 'error', error: message.error }));
+        setPageCheck((prev) => ({
+          ...prev,
+          status: 'error',
+          progress: undefined,
+          error: message.error,
+        }));
       }
     };
     chrome.runtime.onMessage.addListener(handler);
@@ -365,6 +370,7 @@ export default function App() {
       setPageCheck({
         status: 'error',
         entries: [],
+        progress: undefined,
         error: error instanceof Error ? error.message : 'Failed to start page fact check.',
       });
     }
