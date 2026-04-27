@@ -279,6 +279,7 @@ const NARRATION_PHASES: NarrationPhase[] = [
     until: 6,
     stage: 'searching',
     messages: [
+      'Tavily /extracting…',
       'Querying reputable news and reference sources…',
       'Dispatching multi-source web searches…',
       'Pulling primary documents and reports…',
