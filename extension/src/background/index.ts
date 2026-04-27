@@ -305,7 +305,7 @@ async function factCheckCurrentPage(): Promise<void> {
 
     broadcastPageProgress({
       stage: 'extracting',
-      message: 'Extracting article content with Tavily…',
+      message: 'Tavily /extracting…',
     });
 
     const extracted = await extractPage(tab.url, apiKey);
