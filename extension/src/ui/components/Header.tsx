@@ -12,7 +12,7 @@ export function Header({ onSettingsClick, showBack, theme, onToggleTheme }: Head
     <header className="header">
       <div className="header-left">
         <div className="logo">
-          <Icons.NotebookPen width={24} height={26} className="logo-icon" />
+          <Icons.NotebookPen width={28} height={28} className="logo-icon" />
           <span className="logo-text">Research Assistant</span>
         </div>
       </div>
