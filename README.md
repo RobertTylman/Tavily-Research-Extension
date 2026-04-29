@@ -1,8 +1,8 @@
 # Tavily Research Assistant
-![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue)
-![Manifest V3](https://img.shields.io/badge/Manifest-V3-green)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)
-![React](https://img.shields.io/badge/React-18-blue)
+![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-grey)
+![Manifest V3](https://img.shields.io/badge/Manifest-V3-grey)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.3-grey)
+![React](https://img.shields.io/badge/React-18-grey)
 
 The most successful tools are the ones that feel effortless. There’s no better place to do research than directly in your browser, one click away.
 
