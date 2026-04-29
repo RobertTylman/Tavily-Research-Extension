@@ -5,7 +5,7 @@ The most successful tools are the ones that feel effortless. There’s no better
 > **Note:** This extension was built as a way to explore 
 > the Tavily `/research` API, how submissions, polling,
 > structured outputs, and source citations work end to end.
-> Project also uses /extract to obtain relevant content from the page first.
+> Project also uses `/extract` to obtain relevant content from the page first.
 
 
 <p align="center">
