@@ -1,6 +1,6 @@
 # Tavily Research Assistant
 
-> **Note:** This extension was built as a hands-on way for me to
+> **Note:** This extension was built as a way to
 > explore and learn the new Tavily `/research` API, how submissions, polling,
 > structured outputs, and source citations work end to end. It is not meant to be a
 > production product, but rather a reference implementation for understanding
