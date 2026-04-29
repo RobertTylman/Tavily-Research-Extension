@@ -1,9 +1,12 @@
 # Tavily Research Assistant
 
-> **Note:** This extension was built as a way to
-> explore and learn the new Tavily `/research` API, how submissions, polling,
-> structured outputs, and source citations work end to end. Project also uses /extract API to 
-> extract content from the page first.
+The most successful tools are the ones that feel effortless. There’s no better place to do research than directly in your browser, one click away.
+
+> **Note:** This extension was built as a way to explore 
+> the Tavily `/research` API, how submissions, polling,
+> structured outputs, and source citations work end to end.
+> Project also uses /extract to obtain relevant content from the page first.
+
 
 <p align="center">
   <img src="assets/screenshot2.png" width="32%" />
