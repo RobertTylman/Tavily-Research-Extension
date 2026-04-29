@@ -333,7 +333,7 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
 
       <div className="security-note">
         <span className="security-icon">🔒</span>
-        <span>All keys and settings are stored locally and never sent to our servers.</span>
+        <span>All keys and settings are stored locally and never sent to servers.</span>
       </div>
 
       <div

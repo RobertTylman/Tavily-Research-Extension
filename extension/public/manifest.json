@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Tavily Research Assistant",
+  "name": "Research Assistant",
   "version": "1.0.0",
   "description": "Extract and verify factual claims from any text with transparent, cited evidence",
   "permissions": ["activeTab", "contextMenus", "storage"],
@@ -45,7 +45,7 @@
         "default": "Ctrl+Shift+F",
         "mac": "Command+Shift+F"
       },
-      "description": "Open Tavily Research Assistant popup"
+      "description": "Open Research Assistant popup"
     }
   }
 }
