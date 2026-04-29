@@ -12,6 +12,7 @@ const DEFAULT_RESEARCH_SETTINGS: ResearchSettings = {
   citationFormat: 'numbered',
   llmProvider: 'anthropic',
   maxClaimsPerPage: 8,
+  showCreditUsage: true,
 };
 
 export const MAX_CLAIMS_MIN = 1;
@@ -189,5 +190,31 @@ export const storage = {
    */
   async resetCreditsUsed(): Promise<void> {
     await chrome.storage.local.set({ creditsUsed: 0 });
+  },
+
+  /**
+   * Read the running estimate of LLM tokens consumed.
+   */
+  async getLlmTokensUsed(): Promise<number> {
+    const result = await chrome.storage.local.get('llmTokensUsed');
+    const value = result.llmTokensUsed;
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  },
+
+  /**
+   * Add to the LLM token counter and return the new total.
+   */
+  async addLlmTokensUsed(amount: number): Promise<number> {
+    const current = await this.getLlmTokensUsed();
+    const next = current + Math.max(0, Math.round(amount));
+    await chrome.storage.local.set({ llmTokensUsed: next });
+    return next;
+  },
+
+  /**
+   * Reset the LLM token counter back to zero.
+   */
+  async resetLlmTokensUsed(): Promise<void> {
+    await chrome.storage.local.set({ llmTokensUsed: 0 });
   },
 };

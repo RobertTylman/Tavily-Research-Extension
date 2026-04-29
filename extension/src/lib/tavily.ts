@@ -32,7 +32,7 @@ const TAVILY_RESEARCH_URL = 'https://api.tavily.com/research';
 const DEFAULT_MODEL: TavilyResearchModel = 'mini';
 const DEFAULT_CITATION_FORMAT: TavilyCitationFormat = 'numbered';
 
-const POLL_INTERVAL_MS = 2500;
+const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
 // ============================================================================

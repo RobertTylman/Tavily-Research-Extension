@@ -16,7 +16,7 @@ import {
   Verdict,
   VerificationState,
 } from '../lib/types';
-import { sendToBackground, sendToContentScript } from '../utils/messaging';
+import { sendToBackground, sendToContentScript, storage } from '../utils/messaging';
 import { ApiKeyInput } from './components/ApiKeyInput';
 import { ClaimCard } from './components/ClaimCard';
 import { Header } from './components/Header';
@@ -62,6 +62,12 @@ export default function App() {
   const [shareState, setShareState] = useState<'idle' | 'copied' | 'error'>('idle');
   const [pageCheck, setPageCheck] = useState<PageCheckState>(initialPageCheck);
   const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
+
+  const [tavilyCredits, setTavilyCredits] = useState<number>(0);
+  const [llmTokens, setLlmTokens] = useState<number>(0);
+  const [showCreditUsage, setShowCreditUsage] = useState<boolean>(true);
+  const [llmProvider, setLlmProvider] = useState<'anthropic' | 'openai'>('anthropic');
+  const [summaryState, setSummaryState] = useState<'idle' | 'copied' | 'error'>('idle');
 
   // Theme state initialization
   const [theme, setTheme] = useState<Theme>(() => {
@@ -242,6 +248,37 @@ export default function App() {
         loadSelectedText();
       }
     });
+
+    // 3. Load initial usage counts
+    chrome.storage.local
+      .get(['creditsUsed', 'llmTokensUsed', 'researchSettings'])
+      .then((result) => {
+        setTavilyCredits(result.creditsUsed || 0);
+        setLlmTokens(result.llmTokensUsed || 0);
+        setShowCreditUsage(result.researchSettings?.showCreditUsage ?? true);
+        setLlmProvider(result.researchSettings?.llmProvider ?? 'anthropic');
+      });
+
+    // 4. Listen for realtime usage updates
+    const handleStorageChange = (
+      changes: { [key: string]: chrome.storage.StorageChange },
+      areaName: string
+    ) => {
+      if (areaName === 'local') {
+        if (changes.creditsUsed) {
+          setTavilyCredits(changes.creditsUsed.newValue || 0);
+        }
+        if (changes.llmTokensUsed) {
+          setLlmTokens(changes.llmTokensUsed.newValue || 0);
+        }
+        if (changes.researchSettings) {
+          setShowCreditUsage(changes.researchSettings.newValue?.showCreditUsage ?? true);
+          setLlmProvider(changes.researchSettings.newValue?.llmProvider ?? 'anthropic');
+        }
+      }
+    };
+    chrome.storage.onChanged.addListener(handleStorageChange);
+    return () => chrome.storage.onChanged.removeListener(handleStorageChange);
   }, [checkApiKey, checkForPendingVerification, loadSelectedText]);
 
   // Subscribe to live research status events from the background worker.
@@ -353,6 +390,8 @@ export default function App() {
     setInputText('');
     setLatestStatus(null);
     setShareState('idle');
+    void storage.resetCreditsUsed();
+    void storage.resetLlmTokensUsed();
   };
 
   /**
@@ -388,6 +427,8 @@ export default function App() {
       console.log('Could not clear annotations:', error);
     }
     setPageCheck(initialPageCheck);
+    void storage.resetCreditsUsed();
+    void storage.resetLlmTokensUsed();
   };
 
   /**
@@ -413,6 +454,25 @@ export default function App() {
     setTimeout(() => setShareState('idle'), 2000);
   };
 
+  /**
+   * Copy a detailed research summary of all page claims to clipboard.
+   */
+  const handleCopySummary = async () => {
+    const text = formatResearchSummary(pageCheck.entries);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        setSummaryState('copied');
+      } else {
+        throw new Error('Clipboard API unavailable');
+      }
+    } catch (error) {
+      console.error('Summary copy failed:', error);
+      setSummaryState('error');
+    }
+    setTimeout(() => setSummaryState('idle'), 2000);
+  };
+
   // Show loading state while checking API key
   if (hasApiKey === null) {
     return (
@@ -421,6 +481,9 @@ export default function App() {
           onSettingsClick={() => setShowSettings(true)}
           theme={theme}
           onToggleTheme={toggleTheme}
+          tavilyCredits={showCreditUsage ? tavilyCredits : undefined}
+          llmTokens={showCreditUsage ? llmTokens : undefined}
+          llmProvider={llmProvider}
         />
         <div className="loading">
           <div className="spinner" />
@@ -439,6 +502,9 @@ export default function App() {
           showBack={hasApiKey === true}
           theme={theme}
           onToggleTheme={toggleTheme}
+          tavilyCredits={showCreditUsage ? tavilyCredits : undefined}
+          llmTokens={showCreditUsage ? llmTokens : undefined}
+          llmProvider={llmProvider}
         />
         <ApiKeyInput
           onSaveApiKey={handleApiKeySave}
@@ -454,6 +520,9 @@ export default function App() {
         onSettingsClick={() => setShowSettings(true)}
         theme={theme}
         onToggleTheme={toggleTheme}
+        tavilyCredits={showCreditUsage ? tavilyCredits : undefined}
+        llmTokens={showCreditUsage ? llmTokens : undefined}
+        llmProvider={llmProvider}
       />
 
       {/* Input Section */}
@@ -499,6 +568,16 @@ export default function App() {
           <div className="results-header">
             <h2>Page Fact Check</h2>
             <div className="results-actions">
+              {pageCheck.status === 'complete' && pageCheck.entries.length > 0 && (
+                <button
+                  className={`share-button ${summaryState !== 'idle' ? `share-button-${summaryState}` : ''}`}
+                  onClick={handleCopySummary}
+                  disabled={summaryState !== 'idle'}
+                  title="Copy a formatted research summary of all claims"
+                >
+                  {summaryState === 'copied' ? '✓ Copied' : 'Copy Summary'}
+                </button>
+              )}
               <button className="new-check-button" onClick={handleClearPageCheck}>
                 {pageCheck.status === 'running' ? 'Cancel' : 'Clear'}
               </button>
@@ -695,16 +774,36 @@ function formatShareText(claims: Claim[], verdicts: Verdict[]): string {
     if (verdict.summary) {
       lines.push(`Summary: ${verdict.summary}`);
     } else if (verdict.explanation) {
-      lines.push(`Explanation: ${verdict.explanation}`);
+      lines.push(`Summary: ${verdict.explanation}`);
     }
     if (verdict.citations.length > 0) {
       lines.push('Sources:');
-      verdict.citations.slice(0, 5).forEach((c, i) => {
-        const label = c.title || c.source;
-        lines.push(`  ${i + 1}. ${label} — ${c.url}`);
-      });
+      verdict.citations.forEach((c) => lines.push(`- ${c.title || c.url} (${c.url})`));
     }
   }
   lines.push('', '— Live Fact-Checking Assistant');
+  return lines.join('\n');
+}
+
+function formatResearchSummary(entries: PageCheckEntry[]): string {
+  const lines: string[] = ['Article Research Summary', ''];
+  entries.forEach((entry, i) => {
+    if (!entry.verdict) return;
+    lines.push(`${i + 1}. Claim: "${entry.claim.text}"`);
+    lines.push(
+      `   Verdict: ${entry.verdict.verdict} (${Math.round(entry.verdict.confidence * 100)}% confidence)`
+    );
+    const explanation = entry.verdict.summary || entry.verdict.explanation;
+    if (explanation) {
+      lines.push(`   Analysis: ${explanation}`);
+    }
+    if (entry.verdict.citations.length > 0) {
+      lines.push('   Sources:');
+      entry.verdict.citations.forEach((c) => {
+        lines.push(`   - ${c.title || c.url} (${c.url})`);
+      });
+    }
+    lines.push('');
+  });
   return lines.join('\n');
 }

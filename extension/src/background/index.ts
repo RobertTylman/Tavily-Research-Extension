@@ -12,7 +12,7 @@
  */
 
 import { researchClaim, TavilyError } from '../lib/tavily';
-import { extractPage } from '../lib/extract';
+import { extractPage, ExtractedPage } from '../lib/extract';
 import { extractClaims, LLMError } from '../lib/llm';
 import {
   checkRateLimit,
@@ -94,6 +94,9 @@ async function verifyText(text: string): Promise<{
   error?: string;
 }> {
   try {
+    await storage.resetCreditsUsed();
+    await storage.resetLlmTokensUsed();
+
     const apiKey = await storage.getApiKey();
     if (!apiKey) {
       return {
@@ -155,6 +158,7 @@ async function verifyText(text: string): Promise<{
           },
         });
         recordRequest();
+        void storage.addCreditsUsed(1);
 
         verdicts.push(verdict);
 
@@ -273,6 +277,9 @@ async function factCheckCurrentPage(): Promise<void> {
   let activeTabId: number | undefined;
 
   try {
+    await storage.resetCreditsUsed();
+    await storage.resetLlmTokensUsed();
+
     const apiKey = await storage.getApiKey();
     if (!apiKey) {
       broadcastPageError('No Tavily API key configured. Add one in settings first.');
@@ -308,8 +315,30 @@ async function factCheckCurrentPage(): Promise<void> {
       message: 'Tavily /extracting…',
     });
 
-    const extracted = await extractPage(tab.url, apiKey);
-    await storage.addCreditsUsed(1);
+    let extracted: ExtractedPage;
+    try {
+      extracted = await extractPage(tab.url, apiKey);
+    } catch (error) {
+      console.warn(
+        '[Background] Tavily extraction failed, falling back to local DOM extraction:',
+        error
+      );
+      broadcastPageProgress({
+        stage: 'extracting',
+        message: 'Tavily extraction failed. Using local page content instead…',
+      });
+
+      const response = await sendToTab(activeTabId, { type: 'GET_ARTICLE_TEXT' });
+      if (!response || !response.text) {
+        throw error; // If even local extraction fails, rethrow the original error
+      }
+
+      extracted = {
+        url: response.url || tab.url,
+        title: response.title || tab.title || '',
+        content: response.text,
+      };
+    }
 
     broadcastPageProgress({
       stage: 'identifying-claims',
@@ -320,6 +349,9 @@ async function factCheckCurrentPage(): Promise<void> {
       provider: settings.llmProvider,
       apiKey: llmKey,
       maxClaims: settings.maxClaimsPerPage,
+      onUsage: (tokens) => {
+        void storage.addLlmTokensUsed(tokens);
+      },
     });
 
     if (claims.length === 0) {
@@ -402,6 +434,7 @@ async function researchSinglePageClaim(
       citationFormat: settings.citationFormat,
     });
     recordRequest();
+    void storage.addCreditsUsed(1);
 
     const shouldCacheVerdict = !(
       verdict.verdict === 'INSUFFICIENT_EVIDENCE' && verdict.confidence <= 0.2
@@ -467,9 +500,10 @@ function broadcastPageError(error: string): void {
   broadcast({ type: 'FACT_CHECK_PAGE_ERROR', error });
 }
 
-function sendToTab(tabId: number, message: ExtensionMessage): void {
-  chrome.tabs.sendMessage(tabId, message).catch(() => {
-    // Content script may not be injected on this page (chrome://, file://, etc.).
+function sendToTab(tabId: number, message: ExtensionMessage): Promise<any> {
+  return chrome.tabs.sendMessage(tabId, message).catch((err) => {
+    console.warn('[Background] sendToTab failed:', err);
+    return null;
   });
 }
 

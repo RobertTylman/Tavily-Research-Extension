@@ -1,13 +1,25 @@
 import { Icons } from '../icons';
+import { NumberTicker } from './NumberTicker';
 
 interface HeaderProps {
   onSettingsClick: () => void;
   showBack?: boolean;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
+  tavilyCredits?: number;
+  llmTokens?: number;
+  llmProvider?: 'anthropic' | 'openai';
 }
 
-export function Header({ onSettingsClick, showBack, theme, onToggleTheme }: HeaderProps) {
+export function Header({
+  onSettingsClick,
+  showBack,
+  theme,
+  onToggleTheme,
+  tavilyCredits,
+  llmTokens,
+  llmProvider,
+}: HeaderProps) {
   return (
     <header className="header">
       <div className="header-left">
@@ -17,6 +29,21 @@ export function Header({ onSettingsClick, showBack, theme, onToggleTheme }: Head
         </div>
       </div>
       <div className="header-actions">
+        {(tavilyCredits !== undefined || llmTokens !== undefined) && (
+          <div className="header-usage" title="API usage">
+            {tavilyCredits !== undefined && (
+              <span className="usage-stat">
+                Tavily: <NumberTicker value={tavilyCredits} />
+              </span>
+            )}
+            {llmTokens !== undefined && (
+              <span className="usage-stat">
+                {llmProvider === 'openai' ? 'GPT' : llmProvider === 'anthropic' ? 'Claude' : 'LLM'}:{' '}
+                <NumberTicker value={llmTokens} />
+              </span>
+            )}
+          </div>
+        )}
         <button
           className="theme-toggle"
           onClick={onToggleTheme}

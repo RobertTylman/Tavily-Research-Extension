@@ -38,6 +38,7 @@ export interface ExtractClaimsOptions {
   apiKey: string;
   maxClaims: number;
   signal?: AbortSignal;
+  onUsage?: (tokens: number) => void;
 }
 
 /**
@@ -130,11 +131,17 @@ async function callAnthropic(prompt: string, options: ExtractClaimsOptions): Pro
 
   const payload = (await response.json()) as {
     content?: Array<{ type: string; text?: string }>;
+    usage?: { input_tokens: number; output_tokens: number };
   };
   const text = payload.content?.find((b) => b.type === 'text')?.text;
   if (!text) {
     throw new LLMError('Anthropic returned no text content', 'anthropic');
   }
+
+  if (options.onUsage && payload.usage) {
+    options.onUsage((payload.usage.input_tokens || 0) + (payload.usage.output_tokens || 0));
+  }
+
   return text;
 }
 
@@ -171,11 +178,17 @@ async function callOpenAI(prompt: string, options: ExtractClaimsOptions): Promis
 
   const payload = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
+    usage?: { total_tokens: number };
   };
   const text = payload.choices?.[0]?.message?.content;
   if (!text) {
     throw new LLMError('OpenAI returned no message content', 'openai');
   }
+
+  if (options.onUsage && payload.usage) {
+    options.onUsage(payload.usage.total_tokens || 0);
+  }
+
   return text;
 }
 

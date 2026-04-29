@@ -31,6 +31,7 @@ const defaultSettings: ResearchSettings = {
   citationFormat: 'numbered',
   llmProvider: 'anthropic',
   maxClaimsPerPage: 8,
+  showCreditUsage: true,
 };
 
 export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInputProps) {
@@ -131,7 +132,23 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
 
   return (
     <div className="api-key-section">
+      <div className="input-wrapper" style={{ marginBottom: '16px' }}>
+        <label className="provider-radio" style={{ padding: '8px 12px', width: '100%' }}>
+          <input
+            type="checkbox"
+            checked={settings.showCreditUsage ?? true}
+            onChange={(e) =>
+              setSettings((prev) => ({ ...prev, showCreditUsage: e.target.checked }))
+            }
+          />
+          <span className="provider-radio-name" style={{ marginLeft: '8px' }}>
+            Monitor API credit use in header
+          </span>
+        </label>
+      </div>
+
       <h2>Configure API Keys</h2>
+
       <p className="api-key-description">
         Tavily powers the research; the LLM provider you pick is used to identify check-worthy
         claims from the current webpage.

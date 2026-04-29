@@ -252,6 +252,7 @@ export interface ResearchSettings {
   citationFormat: TavilyCitationFormat;
   llmProvider: LLMProvider;
   maxClaimsPerPage: number;
+  showCreditUsage: boolean;
 }
 
 export interface LLMKeyStatus {
