@@ -2,9 +2,8 @@
 
 > **Note:** This extension was built as a way to
 > explore and learn the new Tavily `/research` API, how submissions, polling,
-> structured outputs, and source citations work end to end. It is not meant to be a
-> production product, but rather a reference implementation for understanding
-> the API.
+> structured outputs, and source citations work end to end. Project also uses /extract API to 
+> extract content from the page first.
 
 <p align="center">
   <img src="assets/screenshot2.png" width="32%" />
