@@ -154,11 +154,6 @@ text on any page and use the keyboard shortcut or context menu.
 ## Development
 
 ```bash
-npm run dev         # vite build --watch
-npm run typecheck   # tsc --noEmit
-npm run lint        # eslint
-npm run format      # prettier --write
-npm run test        # vitest run
 npm run build       # typecheck + vite build + postbuild copy
 ```
 
