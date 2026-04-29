@@ -7,9 +7,9 @@
 > the API.
 
 <p align="center">
-  <img src="assets/screenshot1.png" width="32%" />
   <img src="assets/screenshot2.png" width="32%" />
   <img src="assets/screenshot3.png" width="32%" />
+  <img src="assets/screenshot1.png" width="32%" />
 </p>
 
  **Project Idea:**
