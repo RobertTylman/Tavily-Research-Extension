@@ -1,4 +1,8 @@
 # Tavily Research Assistant
+![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue)
+![Manifest V3](https://img.shields.io/badge/Manifest-V3-green)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)
+![React](https://img.shields.io/badge/React-18-blue)
 
 The most successful tools are the ones that feel effortless. There’s no better place to do research than directly in your browser, one click away.
 
@@ -18,11 +22,6 @@ The most successful tools are the ones that feel effortless. There’s no better
 Lightweight Chrome Extension that runs Tavily's `/research` endpoint on any text you paste or
 select on a webpage, then renders the resulting verdict, summary, and cited
 sources in a popup. Also performs article fact checking with inline annotations.
-
-![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue)
-![Manifest V3](https://img.shields.io/badge/Manifest-V3-green)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)
-![React](https://img.shields.io/badge/React-18-blue)
 
 ## How To Use:
 
