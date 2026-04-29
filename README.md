@@ -1,9 +1,12 @@
 # Tavily Research Assistant
 
-> **Note:** This extension was built as a way to
-> explore and learn the new Tavily `/research` API, how submissions, polling,
-> structured outputs, and source citations work end to end. Project also uses /extract API to 
-> extract content from the page first.
+The most successful tools are the ones that feel effortless. There’s no better place to do research than directly in your browser, one click away.
+
+> **Note:** This extension was built as a way to explore 
+> the Tavily `/research` API, how submissions, polling,
+> structured outputs, and source citations work end to end.
+> Project also uses /extract to obtain relevant content from the page first.
+
 
 <p align="center">
   <img src="assets/screenshot2.png" width="32%" />
@@ -12,9 +15,9 @@
 </p>
 
  **Project Idea:**
-A Chrome extension that runs Tavily's `/research` API on any text you paste or
+Lightweight Chrome Extension that runs Tavily's `/research` API on any text you paste or
 select on a webpage, then renders the resulting verdict, summary, and cited
-sources in a popup.
+sources in a popup. Also performs article fact checking with inline annotations.
 
 ![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-green)
