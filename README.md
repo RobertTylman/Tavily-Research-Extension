@@ -3,7 +3,7 @@
 The most successful tools are the ones that feel effortless. There’s no better place to do research than directly in your browser, one click away.
 
 > **Note:** This extension was built as a way to explore 
-> the Tavily `/research` API, how submissions, polling,
+> the Tavily `/research` endpoint, how submissions, polling,
 > structured outputs, and source citations work end to end.
 > Project also uses `/extract` to obtain relevant content from the page first.
 
