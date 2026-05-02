@@ -6,6 +6,10 @@
   "permissions": ["activeTab", "contextMenus", "storage"],
   "host_permissions": [
     "https://api.tavily.com/*",
+    "https://api.exa.ai/*",
+    "https://api.search.brave.com/*",
+    "https://api.firecrawl.dev/*",
+    "https://api.parallel.ai/*",
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",
     "https://huggingface.co/*",

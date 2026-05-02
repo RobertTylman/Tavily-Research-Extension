@@ -5,12 +5,14 @@
  * fact-checks don't trigger another Tavily research run.
  */
 
-import { Claim, Verdict } from '../lib/types';
+import { Claim, ProviderKind, ProviderMode, Verdict } from '../lib/types';
 
 export interface CachedVerification {
   claim: Claim;
   verdict: Verdict;
   timestamp: number;
+  provider?: ProviderKind;
+  providerMode?: ProviderMode;
 }
 
 interface CacheData {
@@ -36,14 +38,20 @@ export async function getCachedVerifications(): Promise<CachedVerification[]> {
 /**
  * Check if a claim has been verified recently.
  */
-export async function getCachedVerdict(claimText: string): Promise<CachedVerification | null> {
+export async function getCachedVerdict(
+  claimText: string,
+  provider?: ProviderKind,
+  providerMode?: ProviderMode
+): Promise<CachedVerification | null> {
   const verifications = await getCachedVerifications();
   const normalizedClaim = normalizeClaimText(claimText);
 
   const match = verifications.find(
     (v) =>
-      normalizeClaimText(v.claim.text) === normalizedClaim ||
-      normalizeClaimText(v.claim.originalText) === normalizedClaim
+      (provider ? v.provider === provider : true) &&
+      (providerMode ? v.providerMode === providerMode : true) &&
+      (normalizeClaimText(v.claim.text) === normalizedClaim ||
+        normalizeClaimText(v.claim.originalText) === normalizedClaim)
   );
 
   return match || null;
@@ -59,11 +67,18 @@ export async function cacheVerification(claim: Claim, verdict: Verdict): Promise
     claim,
     verdict,
     timestamp: Date.now(),
+    provider: verdict.provider,
+    providerMode: verdict.providerMode,
   };
 
   const normalizedClaim = normalizeClaimText(claim.text);
   const filtered = verifications.filter(
-    (v) => normalizeClaimText(v.claim.text) !== normalizedClaim
+    (v) =>
+      !(
+        normalizeClaimText(v.claim.text) === normalizedClaim &&
+        v.provider === verdict.provider &&
+        v.providerMode === verdict.providerMode
+      )
   );
 
   filtered.unshift(newEntry);

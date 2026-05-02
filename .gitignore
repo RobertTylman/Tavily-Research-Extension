@@ -21,9 +21,17 @@ npm-debug.log*
 .env
 .env.local
 .env.*.local
+eval/.venv/
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Python / notebooks
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+eval/results/
+eval/eval/results/
 
 # Source maps (optional - remove if you want them in repo)
 *.map
@@ -36,3 +44,7 @@ Thumbs.db
 3.png
 
 dist.zip
+
+# Local workspace files
+.claude/
+plan.md

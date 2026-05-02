@@ -11,6 +11,7 @@ import {
   ExtensionMessage,
   PageClaim,
   PageFactCheckProgress,
+  ProviderKind,
   ResearchSettings,
   ResearchStatus,
   Verdict,
@@ -64,6 +65,7 @@ export default function App() {
   const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
 
   const [tavilyCredits, setTavilyCredits] = useState<number>(0);
+  const [researchProvider, setResearchProvider] = useState<ProviderKind>('tavily');
   const [llmTokens, setLlmTokens] = useState<number>(0);
   const [showCreditUsage, setShowCreditUsage] = useState<boolean>(true);
   const [llmProvider, setLlmProvider] = useState<'anthropic' | 'openai'>('anthropic');
@@ -171,11 +173,14 @@ export default function App() {
     [inputText]
   );
 
-  const checkApiKey = useCallback(async () => {
+  const refreshProviderState = useCallback(async () => {
     try {
-      const response = await sendToBackground<{ hasKey: boolean }>({ type: 'GET_API_KEY' });
-      setHasApiKey(response.hasKey);
-      if (!response.hasKey) {
+      const settings = await storage.getResearchSettings();
+      const providerKey = await storage.getProviderKey(settings.researchProvider);
+      const hasKey = typeof providerKey === 'string' && providerKey.length > 0;
+      setResearchProvider(settings.researchProvider);
+      setHasApiKey(hasKey);
+      if (!hasKey) {
         setShowSettings(true);
       }
     } catch (error) {
@@ -223,7 +228,7 @@ export default function App() {
    */
   useEffect(() => {
     // 1. Initial configuration checks
-    checkApiKey();
+    refreshProviderState();
     checkForPendingVerification();
 
     // 2. Load saved session state
@@ -274,12 +279,17 @@ export default function App() {
         if (changes.researchSettings) {
           setShowCreditUsage(changes.researchSettings.newValue?.showCreditUsage ?? true);
           setLlmProvider(changes.researchSettings.newValue?.llmProvider ?? 'anthropic');
+          setResearchProvider(changes.researchSettings.newValue?.researchProvider ?? 'tavily');
+          void refreshProviderState();
+        }
+        if (changes.providerKeys) {
+          void refreshProviderState();
         }
       }
     };
     chrome.storage.onChanged.addListener(handleStorageChange);
     return () => chrome.storage.onChanged.removeListener(handleStorageChange);
-  }, [checkApiKey, checkForPendingVerification, loadSelectedText]);
+  }, [refreshProviderState, checkForPendingVerification, loadSelectedText]);
 
   // Subscribe to live research status events from the background worker.
   useEffect(() => {
@@ -354,11 +364,13 @@ export default function App() {
   /**
    * Handle API key save
    */
-  const handleApiKeySave = async (apiKey: string) => {
+  const handleProviderKeySave = async (provider: ProviderKind, apiKey: string) => {
     try {
-      await sendToBackground({ type: 'SET_API_KEY', apiKey });
-      setHasApiKey(true);
-      setShowSettings(false);
+      await sendToBackground({ type: 'SET_PROVIDER_API_KEY', provider, apiKey });
+      await refreshProviderState();
+      if (provider === researchProvider) {
+        setShowSettings(false);
+      }
     } catch (error) {
       console.error('Failed to save API key:', error);
     }
@@ -481,7 +493,8 @@ export default function App() {
           onSettingsClick={() => setShowSettings(true)}
           theme={theme}
           onToggleTheme={toggleTheme}
-          tavilyCredits={showCreditUsage ? tavilyCredits : undefined}
+          researchRequests={showCreditUsage ? tavilyCredits : undefined}
+          researchProviderLabel={providerDisplayName(researchProvider)}
           llmTokens={showCreditUsage ? llmTokens : undefined}
           llmProvider={llmProvider}
         />
@@ -502,12 +515,13 @@ export default function App() {
           showBack={hasApiKey === true}
           theme={theme}
           onToggleTheme={toggleTheme}
-          tavilyCredits={showCreditUsage ? tavilyCredits : undefined}
+          researchRequests={showCreditUsage ? tavilyCredits : undefined}
+          researchProviderLabel={providerDisplayName(researchProvider)}
           llmTokens={showCreditUsage ? llmTokens : undefined}
           llmProvider={llmProvider}
         />
         <ApiKeyInput
-          onSaveApiKey={handleApiKeySave}
+          onSaveProviderKey={handleProviderKeySave}
           onSaveResearchSettings={handleResearchSettingsSave}
         />
       </div>
@@ -520,7 +534,8 @@ export default function App() {
         onSettingsClick={() => setShowSettings(true)}
         theme={theme}
         onToggleTheme={toggleTheme}
-        tavilyCredits={showCreditUsage ? tavilyCredits : undefined}
+        researchRequests={showCreditUsage ? tavilyCredits : undefined}
+        researchProviderLabel={providerDisplayName(researchProvider)}
         llmTokens={showCreditUsage ? llmTokens : undefined}
         llmProvider={llmProvider}
       />
@@ -762,6 +777,22 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function providerDisplayName(provider: ProviderKind): string {
+  switch (provider) {
+    case 'exa':
+      return 'Exa';
+    case 'brave':
+      return 'Brave';
+    case 'firecrawl':
+      return 'Firecrawl';
+    case 'parallel':
+      return 'Parallel';
+    case 'tavily':
+    default:
+      return 'Tavily';
+  }
 }
 
 function formatShareText(claims: Claim[], verdicts: Verdict[]): string {

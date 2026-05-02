@@ -1,0 +1,293 @@
+[
+  {
+    "id": "artifact_001",
+    "timestamp": "2026-05-02T12:00:00Z",
+    "claim": {
+      "id": "claim_moon_01",
+      "text": "The Moon landing occurred in 1969.",
+      "originalText": "The Moon landing occurred in 1969."
+    },
+    "provider": "tavily",
+    "provider_mode": "tavily_research",
+    "extract_endpoint": "POST https://api.tavily.com/extract",
+    "research_endpoint": "POST/GET https://api.tavily.com/research",
+    "retrieved_contexts": [
+      "NASA archives state Apollo 11 landed on the Moon on July 20, 1969.",
+      "Britannica identifies Apollo 11 as the first crewed lunar landing in 1969."
+    ],
+    "response": {
+      "verdict": "SUPPORTED",
+      "explanation": "Multiple authoritative sources agree that Apollo 11 landed on the Moon in July 1969.",
+      "summary": "The claim is correct.",
+      "confidence": 0.98,
+      "report": "Apollo 11 landed on July 20, 1969."
+    },
+    "citations": [
+      {
+        "title": "Apollo 11 Mission Overview",
+        "source": "NASA",
+        "url": "https://www.nasa.gov/mission_pages/apollo/missions/apollo11.html",
+        "snippet": "Apollo 11 landed on the Moon on July 20, 1969.",
+        "provider": "tavily"
+      },
+      {
+        "title": "Apollo 11",
+        "source": "Britannica",
+        "url": "https://www.britannica.com/topic/Apollo-11",
+        "snippet": "Apollo 11 was the first crewed mission to land on the Moon in 1969.",
+        "provider": "tavily"
+      }
+    ],
+    "reference_answer": "Apollo 11 landed on the Moon on July 20, 1969.",
+    "reference_verdict": "SUPPORTED",
+    "latency_ms": 9400,
+    "status": "success",
+    "cost_estimate": 0.03
+  },
+  {
+    "id": "artifact_002",
+    "timestamp": "2026-05-02T12:01:00Z",
+    "claim": {
+      "id": "claim_moon_01",
+      "text": "The Moon landing occurred in 1969.",
+      "originalText": "The Moon landing occurred in 1969."
+    },
+    "provider": "exa",
+    "provider_mode": "exa_search_structured",
+    "extract_endpoint": "POST https://api.exa.ai/contents",
+    "research_endpoint": "POST https://api.exa.ai/search",
+    "retrieved_contexts": [
+      "Apollo 11 reached the lunar surface on July 20, 1969.",
+      "Historical references identify 1969 as the year of the first Moon landing."
+    ],
+    "response": {
+      "verdict": "SUPPORTED",
+      "explanation": "Exa surfaced grounded sources confirming Apollo 11 landed in 1969.",
+      "summary": "The claim is supported.",
+      "confidence": 0.95,
+      "report": "Grounded sources support the date."
+    },
+    "citations": [
+      {
+        "title": "Apollo 11",
+        "source": "Britannica",
+        "url": "https://www.britannica.com/topic/Apollo-11",
+        "snippet": "Apollo 11 landed on the Moon in 1969.",
+        "provider": "exa"
+      }
+    ],
+    "reference_answer": "Apollo 11 landed on the Moon on July 20, 1969.",
+    "reference_verdict": "SUPPORTED",
+    "latency_ms": 2100,
+    "status": "success",
+    "cost_estimate": 0.01
+  },
+  {
+    "id": "artifact_003",
+    "timestamp": "2026-05-02T12:02:00Z",
+    "claim": {
+      "id": "claim_pluto_01",
+      "text": "Pluto is officially classified as a planet.",
+      "originalText": "Pluto is officially classified as a planet."
+    },
+    "provider": "brave",
+    "provider_mode": "brave_context_plus_judge",
+    "research_endpoint": "POST https://api.search.brave.com/res/v1/llm/context",
+    "retrieved_contexts": [
+      "The IAU reclassified Pluto as a dwarf planet in 2006.",
+      "References describe Pluto as meeting some but not all planetary criteria."
+    ],
+    "response": {
+      "verdict": "FALSE",
+      "explanation": "The IAU's 2006 decision defines Pluto as a dwarf planet rather than a planet.",
+      "summary": "The claim is false.",
+      "confidence": 0.92,
+      "report": "Multiple reference sources cite the 2006 reclassification."
+    },
+    "citations": [
+      {
+        "title": "IAU Resolution B5",
+        "source": "IAU",
+        "url": "https://www.iau.org/static/resolutions/Resolution_GA26-5-6.pdf",
+        "snippet": "Pluto is classified as a dwarf planet.",
+        "provider": "brave"
+      }
+    ],
+    "reference_answer": "Pluto has been classified as a dwarf planet since 2006.",
+    "reference_verdict": "FALSE",
+    "latency_ms": 3900,
+    "status": "success",
+    "cost_estimate": 0.02
+  },
+  {
+    "id": "artifact_004",
+    "timestamp": "2026-05-02T12:03:00Z",
+    "claim": {
+      "id": "claim_population_01",
+      "text": "Tokyo is the most populous metropolitan area in the world.",
+      "originalText": "Tokyo is the most populous metropolitan area in the world."
+    },
+    "provider": "parallel",
+    "provider_mode": "parallel_task_run",
+    "research_endpoint": "POST/GET https://api.parallel.ai/v1/tasks/runs",
+    "retrieved_contexts": [
+      "UN and economic references frequently rank Tokyo as the largest metro area by population."
+    ],
+    "response": {
+      "verdict": "SUPPORTED",
+      "explanation": "Parallel's task output cited demographic references ranking Tokyo highest by metro population.",
+      "summary": "The claim is supported by standard metro-area rankings.",
+      "confidence": 0.88,
+      "report": "Population rankings support the claim."
+    },
+    "citations": [
+      {
+        "title": "Demographia World Urban Areas",
+        "source": "Demographia",
+        "url": "https://www.demographia.com/db-worldua.pdf",
+        "snippet": "Tokyo-Yokohama appears as the world's largest urban agglomeration.",
+        "provider": "parallel"
+      }
+    ],
+    "reference_answer": "Tokyo is widely cited as the world's largest metropolitan area by population.",
+    "reference_verdict": "SUPPORTED",
+    "latency_ms": 7600,
+    "status": "success",
+    "cost_estimate": 0.05
+  },
+  {
+    "id": "artifact_005",
+    "timestamp": "2026-05-02T12:04:00Z",
+    "claim": {
+      "id": "claim_health_01",
+      "text": "Vitamin C prevents the common cold in the general population.",
+      "originalText": "Vitamin C prevents the common cold in the general population."
+    },
+    "provider": "firecrawl",
+    "provider_mode": "firecrawl_search_plus_judge",
+    "research_endpoint": "POST https://api.firecrawl.dev/v2/search",
+    "retrieved_contexts": [
+      "Clinical reviews report no meaningful prevention effect for the general population, but some reduction in duration."
+    ],
+    "response": {
+      "verdict": "MISLEADING",
+      "explanation": "The claim overstates the evidence. Routine supplementation is not shown to prevent colds broadly, though it may modestly affect duration.",
+      "summary": "The claim is misleading.",
+      "confidence": 0.84,
+      "report": "Evidence is mixed and the prevention framing is too strong."
+    },
+    "citations": [
+      {
+        "title": "Vitamin C for preventing and treating the common cold",
+        "source": "Cochrane",
+        "url": "https://www.cochranelibrary.com/cdsr/doi/10.1002/14651858.CD000980.pub4/full",
+        "snippet": "Vitamin C did not reduce the incidence of colds in the general population.",
+        "provider": "firecrawl"
+      }
+    ],
+    "reference_answer": "Evidence does not show prevention in the general population, though duration may be slightly reduced.",
+    "reference_verdict": "MISLEADING",
+    "latency_ms": 4300,
+    "status": "success",
+    "cost_estimate": 0.02
+  },
+  {
+    "id": "artifact_006",
+    "timestamp": "2026-05-02T12:05:00Z",
+    "claim": {
+      "id": "claim_current_01",
+      "text": "The latest U.S. inflation reading was below 3 percent.",
+      "originalText": "The latest U.S. inflation reading was below 3 percent."
+    },
+    "provider": "exa",
+    "provider_mode": "exa_search_structured",
+    "research_endpoint": "POST https://api.exa.ai/search",
+    "retrieved_contexts": [
+      "Recent economic coverage discusses inflation changes, but the retrieved set mixes months and lacks clear date alignment."
+    ],
+    "response": {
+      "verdict": "INSUFFICIENT_EVIDENCE",
+      "explanation": "The retrieved sources did not clearly align on the latest release date, so the claim could not be verified confidently.",
+      "summary": "The evidence set was too date-ambiguous.",
+      "confidence": 0.31,
+      "report": "Freshness ambiguity prevented a reliable verdict."
+    },
+    "citations": [
+      {
+        "title": "Inflation News Roundup",
+        "source": "Reuters",
+        "url": "https://www.reuters.com/",
+        "snippet": "Coverage referenced inflation changes but did not provide enough month-specific context in the retrieved excerpt.",
+        "provider": "exa"
+      }
+    ],
+    "reference_answer": "Use a dated benchmark artifact for this claim and treat freshness carefully.",
+    "reference_verdict": "INSUFFICIENT_EVIDENCE",
+    "latency_ms": 2500,
+    "status": "success",
+    "cost_estimate": 0.01
+  },
+  {
+    "id": "artifact_007",
+    "timestamp": "2026-05-02T12:06:00Z",
+    "claim": {
+      "id": "claim_pluto_01",
+      "text": "Pluto is officially classified as a planet.",
+      "originalText": "Pluto is officially classified as a planet."
+    },
+    "provider": "brave",
+    "provider_mode": "brave_answers_native",
+    "research_endpoint": "POST https://api.search.brave.com/res/v1/chat/completions",
+    "retrieved_contexts": [],
+    "response": {
+      "verdict": "INSUFFICIENT_EVIDENCE",
+      "explanation": "The native answer returned prose without a normalized verdict payload.",
+      "summary": "Fallback normalization failed to score this run cleanly.",
+      "confidence": 0.2,
+      "report": "This sample is useful for testing error and fallback handling."
+    },
+    "citations": [],
+    "reference_answer": "Pluto has been classified as a dwarf planet since 2006.",
+    "reference_verdict": "FALSE",
+    "latency_ms": 3100,
+    "status": "error",
+    "error_type": "NormalizationError",
+    "cost_estimate": 0.02
+  },
+  {
+    "id": "artifact_008",
+    "timestamp": "2026-05-02T12:07:00Z",
+    "claim": {
+      "id": "claim_population_01",
+      "text": "Tokyo is the most populous metropolitan area in the world.",
+      "originalText": "Tokyo is the most populous metropolitan area in the world."
+    },
+    "provider": "tavily",
+    "provider_mode": "tavily_research",
+    "research_endpoint": "POST/GET https://api.tavily.com/research",
+    "retrieved_contexts": [
+      "One retrieved source ranked Tokyo highest, another used a different metro definition and introduced ambiguity."
+    ],
+    "response": {
+      "verdict": "MISLEADING",
+      "explanation": "The answer over-weighted differences in metro definitions and landed on a harsher verdict than the benchmark.",
+      "summary": "A definition mismatch caused a downgrade.",
+      "confidence": 0.62,
+      "report": "Useful for confusion-matrix analysis."
+    },
+    "citations": [
+      {
+        "title": "World Urban Areas",
+        "source": "Demographia",
+        "url": "https://www.demographia.com/db-worldua.pdf",
+        "snippet": "Tokyo-Yokohama appears at the top of the ranking.",
+        "provider": "tavily"
+      }
+    ],
+    "reference_answer": "Tokyo is widely cited as the world's largest metropolitan area by population.",
+    "reference_verdict": "SUPPORTED",
+    "latency_ms": 8800,
+    "status": "success",
+    "cost_estimate": 0.03
+  }
+]

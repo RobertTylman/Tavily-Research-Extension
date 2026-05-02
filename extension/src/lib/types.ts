@@ -21,6 +21,27 @@ export interface Claim {
   originalText: string;
 }
 
+export type ProviderKind = 'tavily' | 'exa' | 'brave' | 'firecrawl' | 'parallel';
+export type ExtractProviderKind = 'tavily' | 'exa' | 'firecrawl';
+export type ResearchProviderKind = ProviderKind;
+
+export type ProviderMode =
+  | 'tavily_research'
+  | 'exa_search_structured'
+  | 'exa_research_async'
+  | 'brave_context_plus_judge'
+  | 'brave_answers_native'
+  | 'firecrawl_search_plus_judge'
+  | 'parallel_task_run';
+
+export interface ProviderApiKeys {
+  tavily?: string;
+  exa?: string;
+  brave?: string;
+  firecrawl?: string;
+  parallel?: string;
+}
+
 // ============================================================================
 // VERDICT TYPES
 // ============================================================================
@@ -58,6 +79,21 @@ export interface Citation {
   entailmentProvider?: string;
   /** Source favicon URL returned by the research endpoint */
   favicon?: string;
+  /** Provider that surfaced this citation */
+  provider?: ProviderKind;
+  /** Rank/order of this citation in provider results */
+  rank?: number;
+  /** Full context used during evaluation, if available */
+  context?: string;
+}
+
+export interface RetrievedEvidence {
+  query: string;
+  contexts: string[];
+  citations: Citation[];
+  rawLatencyMs: number;
+  provider: ProviderKind;
+  mode: ProviderMode;
 }
 
 /**
@@ -84,6 +120,39 @@ export interface Verdict {
   summary?: string;
   /** How long the research call took, in seconds */
   researchTimeSeconds?: number;
+  /** Provider that produced the verdict */
+  provider?: ProviderKind;
+  /** Mode/endpoint strategy used */
+  providerMode?: ProviderMode;
+  /** Retrieved evidence used to form the verdict */
+  retrievedEvidence?: RetrievedEvidence;
+  /** Research endpoint used to produce this verdict */
+  researchEndpoint?: string;
+}
+
+export interface EvaluationArtifact {
+  id: string;
+  timestamp: string;
+  claim: Claim;
+  provider: ProviderKind;
+  provider_mode: ProviderMode;
+  extract_endpoint?: string;
+  research_endpoint?: string;
+  retrieved_contexts: string[];
+  response: {
+    verdict?: VerdictLabel;
+    explanation?: string;
+    summary?: string;
+    confidence?: number;
+    report?: string;
+  };
+  citations: Citation[];
+  reference_answer?: string;
+  reference_verdict?: VerdictLabel;
+  latency_ms: number;
+  status: 'success' | 'error';
+  error_type?: string;
+  cost_estimate?: number | null;
 }
 
 // ============================================================================
@@ -177,6 +246,12 @@ export interface ResearchStatus {
   elapsedSeconds: number;
 }
 
+export interface ResearchRunState {
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  statusMessage?: string;
+  verdict?: Verdict;
+}
+
 // ============================================================================
 // PAGE FACT-CHECKER TYPES
 // ============================================================================
@@ -229,6 +304,8 @@ export type ExtensionMessage =
   | { type: 'RESEARCH_STATUS'; claimId: string; status: ResearchStatus }
   | { type: 'SET_API_KEY'; apiKey: string }
   | { type: 'GET_API_KEY' }
+  | { type: 'SET_PROVIDER_API_KEY'; provider: ProviderKind; apiKey: string }
+  | { type: 'GET_PROVIDER_KEY_STATUS' }
   | { type: 'API_KEY_RESPONSE'; hasKey: boolean }
   | { type: 'GET_RESEARCH_SETTINGS' }
   | { type: 'SET_RESEARCH_SETTINGS'; settings: ResearchSettings }
@@ -248,6 +325,9 @@ export type ExtensionMessage =
 // ============================================================================
 
 export interface ResearchSettings {
+  researchProvider: ResearchProviderKind;
+  providerMode: ProviderMode;
+  pageExtractionProvider: ExtractProviderKind;
   model: TavilyResearchModel;
   citationFormat: TavilyCitationFormat;
   llmProvider: LLMProvider;
@@ -258,6 +338,14 @@ export interface ResearchSettings {
 export interface LLMKeyStatus {
   anthropic: boolean;
   openai: boolean;
+}
+
+export interface ProviderKeyStatus {
+  tavily: boolean;
+  exa: boolean;
+  brave: boolean;
+  firecrawl: boolean;
+  parallel: boolean;
 }
 
 /**

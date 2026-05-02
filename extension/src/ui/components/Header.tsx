@@ -6,7 +6,8 @@ interface HeaderProps {
   showBack?: boolean;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
-  tavilyCredits?: number;
+  researchRequests?: number;
+  researchProviderLabel?: string;
   llmTokens?: number;
   llmProvider?: 'anthropic' | 'openai';
 }
@@ -16,7 +17,8 @@ export function Header({
   showBack,
   theme,
   onToggleTheme,
-  tavilyCredits,
+  researchRequests,
+  researchProviderLabel,
   llmTokens,
   llmProvider,
 }: HeaderProps) {
@@ -29,11 +31,11 @@ export function Header({
         </div>
       </div>
       <div className="header-actions">
-        {(tavilyCredits !== undefined || llmTokens !== undefined) && (
+        {(researchRequests !== undefined || llmTokens !== undefined) && (
           <div className="header-usage" title="API usage">
-            {tavilyCredits !== undefined && (
+            {researchRequests !== undefined && (
               <span className="usage-stat">
-                Tavily: <NumberTicker value={tavilyCredits} />
+                {researchProviderLabel || 'Research'}: <NumberTicker value={researchRequests} />
               </span>
             )}
             {llmTokens !== undefined && (

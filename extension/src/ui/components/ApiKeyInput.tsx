@@ -1,32 +1,39 @@
-/**
- * API Key Input Component
- *
- * Settings panel for:
- *   - Tavily API key (required)
- *   - LLM provider + API keys (Anthropic / OpenAI) used by the page fact checker
- *   - Tavily research model + citation format
- *   - Max claims per page (slider)
- *
- * Provider, slider, and dropdown changes auto-save so the user never has to
- * hit a separate "save" button to make their preference stick.
- */
-
 import { useEffect, useRef, useState } from 'react';
 import {
+  ExtractProviderKind,
   LLMProvider,
+  ProviderKind,
+  ProviderMode,
   ResearchSettings,
   TavilyCitationFormat,
   TavilyResearchModel,
 } from '../../lib/types';
-import { MAX_CLAIMS_MAX, MAX_CLAIMS_MIN, sendToBackground, storage } from '../../utils/messaging';
+import {
+  DEFAULT_PROVIDER_MODE,
+  EXTRACTION_PROVIDER_OPTIONS,
+  MAX_CLAIMS_MAX,
+  MAX_CLAIMS_MIN,
+  RESEARCH_PROVIDER_OPTIONS,
+  sendToBackground,
+  storage,
+} from '../../utils/messaging';
+import {
+  buildEvaluationArtifactsFilename,
+  clearEvaluationArtifacts,
+  listEvaluationArtifacts,
+  serializeEvaluationArtifacts,
+} from '../../utils/evalArtifacts';
 import { Icons } from '../icons';
 
 interface ApiKeyInputProps {
-  onSaveApiKey: (apiKey: string) => Promise<void>;
+  onSaveProviderKey: (provider: ProviderKind, apiKey: string) => Promise<void>;
   onSaveResearchSettings: (settings: ResearchSettings) => Promise<void>;
 }
 
 const defaultSettings: ResearchSettings = {
+  researchProvider: 'tavily',
+  providerMode: 'tavily_research',
+  pageExtractionProvider: 'tavily',
   model: 'mini',
   citationFormat: 'numbered',
   llmProvider: 'anthropic',
@@ -34,20 +41,57 @@ const defaultSettings: ResearchSettings = {
   showCreditUsage: true,
 };
 
-export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInputProps) {
-  // Tavily key — single inline field. Shows the stored key (masked) and lets
-  // the user paste a new one to replace it. The Save button only appears
-  // once the value has actually changed.
-  const [apiKey, setApiKey] = useState('');
-  const [storedKey, setStoredKey] = useState<string | null>(null);
-  const [showKey, setShowKey] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+const PROVIDERS: ProviderKind[] = ['tavily', 'exa', 'brave', 'firecrawl', 'parallel'];
 
-  // Settings (research model, citation format, llm provider, max claims)
+const PROVIDER_LABELS: Record<ProviderKind, string> = {
+  tavily: 'Tavily',
+  exa: 'Exa',
+  brave: 'Brave',
+  firecrawl: 'Firecrawl',
+  parallel: 'Parallel',
+};
+
+const PROVIDER_MODE_OPTIONS: Record<ProviderKind, Array<{ value: ProviderMode; label: string }>> = {
+  tavily: [{ value: 'tavily_research', label: 'Native async research' }],
+  exa: [
+    { value: 'exa_search_structured', label: 'Structured search verdict' },
+    { value: 'exa_research_async', label: 'Async research task' },
+  ],
+  brave: [
+    { value: 'brave_context_plus_judge', label: 'LLM Context + shared judge' },
+    { value: 'brave_answers_native', label: 'Native Answers API' },
+  ],
+  firecrawl: [{ value: 'firecrawl_search_plus_judge', label: 'Search + shared judge' }],
+  parallel: [{ value: 'parallel_task_run', label: 'Task run verdict' }],
+};
+
+export function ApiKeyInput({ onSaveProviderKey, onSaveResearchSettings }: ApiKeyInputProps) {
   const [settings, setSettings] = useState<ResearchSettings>(defaultSettings);
   const settingsLoadedRef = useRef(false);
 
-  // LLM keys — single inline field per provider, mirroring the Tavily key UX.
+  const [storedProviderKeys, setStoredProviderKeys] = useState<Record<ProviderKind, string | null>>({
+    tavily: null,
+    exa: null,
+    brave: null,
+    firecrawl: null,
+    parallel: null,
+  });
+  const [providerKeyInputs, setProviderKeyInputs] = useState<Record<ProviderKind, string>>({
+    tavily: '',
+    exa: '',
+    brave: '',
+    firecrawl: '',
+    parallel: '',
+  });
+  const [showProviderKeyInput, setShowProviderKeyInput] = useState<Record<ProviderKind, boolean>>({
+    tavily: false,
+    exa: false,
+    brave: false,
+    firecrawl: false,
+    parallel: false,
+  });
+  const [savingProvider, setSavingProvider] = useState<ProviderKind | null>(null);
+
   const [storedLlmKeys, setStoredLlmKeys] = useState<Record<LLMProvider, string | null>>({
     anthropic: null,
     openai: null,
@@ -61,21 +105,32 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
     openai: false,
   });
   const [savingLlm, setSavingLlm] = useState<LLMProvider | null>(null);
+  const [artifactCount, setArtifactCount] = useState(0);
+  const [exportState, setExportState] = useState<'idle' | 'exporting' | 'done' | 'error'>('idle');
+  const [clearState, setClearState] = useState<'idle' | 'clearing' | 'done' | 'error'>('idle');
 
-  // Initial load
   useEffect(() => {
-    storage.getApiKey().then((key) => {
-      if (key) {
-        setStoredKey(key);
-        setApiKey(key);
-      }
-    });
-
     storage.getResearchSettings().then((loaded) => {
       setSettings(loaded);
-      // Mark loaded AFTER state is set so the auto-save effect doesn't fire
-      // for the initial load.
       settingsLoadedRef.current = true;
+    });
+
+    Promise.all(PROVIDERS.map((provider) => storage.getProviderKey(provider))).then((values) => {
+      const stored = {
+        tavily: values[0],
+        exa: values[1],
+        brave: values[2],
+        firecrawl: values[3],
+        parallel: values[4],
+      };
+      setStoredProviderKeys(stored);
+      setProviderKeyInputs({
+        tavily: values[0] ?? '',
+        exa: values[1] ?? '',
+        brave: values[2] ?? '',
+        firecrawl: values[3] ?? '',
+        parallel: values[4] ?? '',
+      });
     });
 
     Promise.all([storage.getLlmApiKey('anthropic'), storage.getLlmApiKey('openai')]).then(
@@ -84,30 +139,31 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
         setLlmKeyInputs({ anthropic: anthropic ?? '', openai: openai ?? '' });
       }
     );
+
+    listEvaluationArtifacts()
+      .then((artifacts) => setArtifactCount(artifacts.length))
+      .catch((error) => {
+        console.error('Failed to load evaluation artifacts:', error);
+      });
   }, []);
 
-  // Auto-save research settings whenever they change after initial load.
   useEffect(() => {
     if (!settingsLoadedRef.current) return;
     void onSaveResearchSettings(settings);
   }, [settings, onSaveResearchSettings]);
 
-  const handleApiKeySubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = apiKey.trim();
-    if (!trimmed || trimmed === storedKey) return;
-
-    setIsSaving(true);
+  const handleProviderKeySave = async (provider: ProviderKind) => {
+    const trimmed = providerKeyInputs[provider].trim();
+    if (!trimmed || trimmed === storedProviderKeys[provider]) return;
+    setSavingProvider(provider);
     try {
-      await onSaveApiKey(trimmed);
-      setStoredKey(trimmed);
-      setApiKey(trimmed);
+      await onSaveProviderKey(provider, trimmed);
+      setStoredProviderKeys((prev) => ({ ...prev, [provider]: trimmed }));
+      setProviderKeyInputs((prev) => ({ ...prev, [provider]: trimmed }));
     } finally {
-      setIsSaving(false);
+      setSavingProvider(null);
     }
   };
-
-  const tavilyDirty = apiKey.trim().length > 0 && apiKey.trim() !== storedKey;
 
   const handleLlmKeySave = async (provider: LLMProvider) => {
     const value = llmKeyInputs[provider].trim();
@@ -122,13 +178,46 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
     }
   };
 
-  const isLlmDirty = (provider: LLMProvider) => {
-    const v = llmKeyInputs[provider].trim();
-    return v.length > 0 && v !== storedLlmKeys[provider];
+  const providerModeOptions = PROVIDER_MODE_OPTIONS[settings.researchProvider];
+
+  const handleExportArtifacts = async () => {
+    setExportState('exporting');
+    try {
+      const artifacts = await listEvaluationArtifacts();
+      setArtifactCount(artifacts.length);
+      if (artifacts.length === 0) {
+        throw new Error('No evaluation artifacts available to export.');
+      }
+
+      const blob = new Blob([serializeEvaluationArtifacts(artifacts)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = buildEvaluationArtifactsFilename();
+      link.click();
+      URL.revokeObjectURL(url);
+      setExportState('done');
+    } catch (error) {
+      console.error('Failed to export evaluation artifacts:', error);
+      setExportState('error');
+    }
+    window.setTimeout(() => setExportState('idle'), 2500);
   };
 
-  const providerLabel = (provider: LLMProvider) =>
-    provider === 'anthropic' ? 'Anthropic' : 'OpenAI';
+  const handleClearArtifacts = async () => {
+    setClearState('clearing');
+    try {
+      await clearEvaluationArtifacts();
+      setArtifactCount(0);
+      setClearState('done');
+    } catch (error) {
+      console.error('Failed to clear evaluation artifacts:', error);
+      setClearState('error');
+    }
+    window.setTimeout(() => setClearState('idle'), 2500);
+  };
 
   return (
     <div className="api-key-section">
@@ -147,50 +236,148 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
         </label>
       </div>
 
-      <h2>Configure API Keys</h2>
+      <h2>Provider Settings</h2>
 
       <p className="api-key-description">
-        Tavily powers the research; the LLM provider you pick is used to identify check-worthy
-        claims from the current webpage.
+        Research provider controls claim verification. Page extraction provider controls how the
+        active tab is cleaned before claim extraction. Anthropic or OpenAI keys power claim
+        extraction and shared judging where needed.
       </p>
 
-      <form onSubmit={handleApiKeySubmit} className="api-key-form">
-        <h3>Tavily API Key</h3>
+      <div className="api-key-form">
+        <h3>Routing</h3>
+
         <div className="input-wrapper">
-          <input
-            type={showKey ? 'text' : 'password'}
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="Paste your Tavily API key"
+          <select
             className="api-key-input"
-            autoComplete="off"
-          />
-          <button
-            type="button"
-            className="toggle-visibility"
-            onClick={() => setShowKey(!showKey)}
-            title={showKey ? 'Hide key' : 'Show key'}
-            aria-label={showKey ? 'Hide key' : 'Show key'}
+            value={settings.researchProvider}
+            onChange={(e) => {
+              const provider = e.target.value as ProviderKind;
+              setSettings((prev) => ({
+                ...prev,
+                researchProvider: provider,
+                providerMode: DEFAULT_PROVIDER_MODE[provider],
+              }));
+            }}
           >
-            {showKey ? (
-              <Icons.EyeOff width={18} height={18} />
-            ) : (
-              <Icons.Eye width={18} height={18} />
-            )}
-          </button>
+            {RESEARCH_PROVIDER_OPTIONS.map((provider) => (
+              <option key={provider} value={provider}>
+                Research provider: {PROVIDER_LABELS[provider]}
+              </option>
+            ))}
+          </select>
         </div>
-        {tavilyDirty && (
-          <button type="submit" className="save-button" disabled={isSaving}>
-            {isSaving ? 'Saving…' : storedKey ? 'Replace key' : 'Save key'}
-          </button>
-        )}
-      </form>
+
+        <div className="input-wrapper">
+          <select
+            className="api-key-input"
+            value={settings.providerMode}
+            onChange={(e) =>
+              setSettings((prev) => ({
+                ...prev,
+                providerMode: e.target.value as ProviderMode,
+              }))
+            }
+          >
+            {providerModeOptions.map((mode) => (
+              <option key={mode.value} value={mode.value}>
+                {mode.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="input-wrapper">
+          <select
+            className="api-key-input"
+            value={settings.pageExtractionProvider}
+            onChange={(e) =>
+              setSettings((prev) => ({
+                ...prev,
+                pageExtractionProvider: e.target.value as ExtractProviderKind,
+              }))
+            }
+          >
+            {EXTRACTION_PROVIDER_OPTIONS.map((provider) => (
+              <option key={provider} value={provider}>
+                Page extraction: {PROVIDER_LABELS[provider]}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="api-key-form">
+        <h3>Provider API Keys</h3>
+        {PROVIDERS.map((provider) => {
+          const dirty =
+            providerKeyInputs[provider].trim().length > 0 &&
+            providerKeyInputs[provider].trim() !== storedProviderKeys[provider];
+          return (
+            <div key={provider} className="llm-key-block">
+              <div className="llm-key-block-header">
+                {PROVIDER_LABELS[provider]} key
+                {storedProviderKeys[provider] && (
+                  <span className="key-check" title="API key configured" aria-label="API key configured">
+                    ✓
+                  </span>
+                )}
+              </div>
+              <div className="llm-key-row">
+                <div className="input-wrapper">
+                  <input
+                    type={showProviderKeyInput[provider] ? 'text' : 'password'}
+                    value={providerKeyInputs[provider]}
+                    onChange={(e) =>
+                      setProviderKeyInputs((prev) => ({ ...prev, [provider]: e.target.value }))
+                    }
+                    placeholder={`Paste ${PROVIDER_LABELS[provider]} API key`}
+                    className="api-key-input"
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    className="toggle-visibility"
+                    onClick={() =>
+                      setShowProviderKeyInput((prev) => ({
+                        ...prev,
+                        [provider]: !prev[provider],
+                      }))
+                    }
+                    aria-label={showProviderKeyInput[provider] ? 'Hide key' : 'Show key'}
+                  >
+                    {showProviderKeyInput[provider] ? (
+                      <Icons.EyeOff width={18} height={18} />
+                    ) : (
+                      <Icons.Eye width={18} height={18} />
+                    )}
+                  </button>
+                </div>
+                {dirty && (
+                  <button
+                    type="button"
+                    className="save-button save-button-secondary"
+                    disabled={savingProvider === provider}
+                    onClick={() => handleProviderKeySave(provider)}
+                  >
+                    {savingProvider === provider
+                      ? 'Saving…'
+                      : storedProviderKeys[provider]
+                        ? 'Replace'
+                        : 'Save'}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
       <div className="api-key-form">
         <h3>Page Fact Checker</h3>
         <p className="api-key-description">
-          Pick the LLM that identifies check-worthy claims from the article. You only need a key for
-          the provider you want to use. Settings save automatically.
+          Pick the LLM that identifies check-worthy claims and powers the shared verdict judge for
+          Brave LLM Context and Firecrawl modes.
         </p>
 
         <div className="provider-radio-group" role="radiogroup" aria-label="Preferred LLM provider">
@@ -206,11 +393,7 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
             />
             <span className="provider-radio-name">Claude</span>
             {storedLlmKeys.anthropic && (
-              <span
-                className="key-check"
-                title="API key configured"
-                aria-label="API key configured"
-              >
+              <span className="key-check" title="API key configured" aria-label="API key configured">
                 ✓
               </span>
             )}
@@ -225,23 +408,21 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
             />
             <span className="provider-radio-name">GPT</span>
             {storedLlmKeys.openai && (
-              <span
-                className="key-check"
-                title="API key configured"
-                aria-label="API key configured"
-              >
+              <span className="key-check" title="API key configured" aria-label="API key configured">
                 ✓
               </span>
             )}
           </label>
         </div>
 
-        {(() => {
-          const provider = settings.llmProvider;
-          const dirty = isLlmDirty(provider);
+        {(['anthropic', 'openai'] as LLMProvider[]).map((provider) => {
+          const dirty =
+            llmKeyInputs[provider].trim().length > 0 &&
+            llmKeyInputs[provider].trim() !== storedLlmKeys[provider];
+          const label = provider === 'anthropic' ? 'Anthropic' : 'OpenAI';
           return (
             <div key={provider} className="llm-key-block">
-              <div className="llm-key-block-header">{providerLabel(provider)} key</div>
+              <div className="llm-key-block-header">{label} key</div>
               <div className="llm-key-row">
                 <div className="input-wrapper">
                   <input
@@ -250,7 +431,7 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
                     onChange={(e) =>
                       setLlmKeyInputs((prev) => ({ ...prev, [provider]: e.target.value }))
                     }
-                    placeholder={`Paste ${providerLabel(provider)} API key`}
+                    placeholder={`Paste ${label} API key`}
                     className="api-key-input"
                     autoComplete="off"
                   />
@@ -286,7 +467,7 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
               </div>
             </div>
           );
-        })()}
+        })}
 
         <div className="claims-slider">
           <div className="claims-slider-label">
@@ -311,40 +492,85 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
           </div>
         </div>
 
-        <h3 style={{ marginTop: 12 }}>Tavily Research</h3>
-        <div className="input-wrapper">
-          <select
-            className="api-key-input"
-            value={settings.model}
-            onChange={(e) =>
-              setSettings((prev) => ({
-                ...prev,
-                model: e.target.value as TavilyResearchModel,
-              }))
-            }
-          >
-            <option value="mini">Mini (fastest, cheapest)</option>
-            <option value="auto">Auto</option>
-            <option value="pro">Pro (deepest research)</option>
-          </select>
-        </div>
+        {settings.researchProvider === 'tavily' && (
+          <>
+            <h3 style={{ marginTop: 12 }}>Tavily Research</h3>
+            <div className="input-wrapper">
+              <select
+                className="api-key-input"
+                value={settings.model}
+                onChange={(e) =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    model: e.target.value as TavilyResearchModel,
+                  }))
+                }
+              >
+                <option value="mini">Mini (fastest, cheapest)</option>
+                <option value="auto">Auto</option>
+                <option value="pro">Pro (deepest research)</option>
+              </select>
+            </div>
 
-        <div className="input-wrapper">
-          <select
-            className="api-key-input"
-            value={settings.citationFormat}
-            onChange={(e) =>
-              setSettings((prev) => ({
-                ...prev,
-                citationFormat: e.target.value as TavilyCitationFormat,
-              }))
-            }
+            <div className="input-wrapper">
+              <select
+                className="api-key-input"
+                value={settings.citationFormat}
+                onChange={(e) =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    citationFormat: e.target.value as TavilyCitationFormat,
+                  }))
+                }
+              >
+                <option value="numbered">Numbered citations [1]</option>
+                <option value="mla">MLA</option>
+                <option value="apa">APA</option>
+                <option value="chicago">Chicago</option>
+              </select>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="api-key-form">
+        <h3>Evaluation Artifacts</h3>
+        <p className="api-key-description">
+          Export stored benchmark runs for offline comparison across provider modes in the `eval/`
+          workspace.
+        </p>
+        <p className="api-key-description" style={{ marginTop: '-4px' }}>
+          Stored artifacts: {artifactCount}
+        </p>
+        <div className="llm-key-row">
+          <button
+            type="button"
+            className="save-button"
+            disabled={exportState === 'exporting'}
+            onClick={() => void handleExportArtifacts()}
           >
-            <option value="numbered">Numbered citations [1]</option>
-            <option value="mla">MLA</option>
-            <option value="apa">APA</option>
-            <option value="chicago">Chicago</option>
-          </select>
+            {exportState === 'exporting'
+              ? 'Exporting…'
+              : exportState === 'done'
+                ? 'Exported'
+                : exportState === 'error'
+                  ? 'Export failed'
+                  : 'Export artifacts'}
+          </button>
+          <button
+            type="button"
+            className="save-button save-button-secondary"
+            disabled={clearState === 'clearing' || artifactCount === 0}
+            onClick={() => void handleClearArtifacts()}
+          >
+            {clearState === 'clearing'
+              ? 'Clearing…'
+              : clearState === 'done'
+                ? 'Cleared'
+                : clearState === 'error'
+                  ? 'Clear failed'
+                  : 'Clear artifacts'}
+          </button>
         </div>
       </div>
 
