@@ -1,4 +1,4 @@
-# Tavily Research Assistant
+# Fact-Checker Research Assistant
 ![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-grey)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-grey)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.3-grey)
@@ -6,10 +6,9 @@
 
 The most successful tools are the ones that feel effortless. There’s no better place to do research than directly in your browser, one click away.
 
-> **Note:** This extension was built as a way to explore 
-> the Tavily `/research` endpoint, how submissions, polling,
-> structured outputs, and source citations work end to end.
-> Project also uses `/extract` to obtain relevant content from the page first.
+> **Note:** This project started as a Tavily-focused extension and now includes
+> a multi-provider evaluation harness for Tavily, Exa, Brave, Firecrawl, and
+> Parallel, plus offline reporting under `eval/`.
 
 
 <p align="center">
@@ -19,9 +18,9 @@ The most successful tools are the ones that feel effortless. There’s no better
 </p>
 
  **Project Idea:**
-Lightweight Chrome Extension that runs Tavily's `/research` endpoint on any text you paste or
-select on a webpage, then renders the resulting verdict, summary, and cited
-sources in a popup. Also performs article fact checking with inline annotations.
+Lightweight Chrome Extension that fact-checks selected text in-browser and a
+Python evaluation workspace that benchmarks multiple research providers against
+the same normalized verdict contract.
 
 ## How To Use:
 
@@ -157,12 +156,106 @@ text on any page and use the keyboard shortcut or context menu.
 npm run build       # typecheck + vite build + postbuild copy
 ```
 
+## Evaluation
+
+The repo includes a Python evaluation workspace under [`eval/`](./eval/README.md).
+It does three separate jobs:
+
+- `run_benchmark.py` runs the same benchmark claims across multiple provider modes and writes normalized JSON artifacts.
+- `evaluate_results.py` aggregates those artifacts into CSV summaries such as provider accuracy, latency, confusion matrices, and error breakdowns.
+- `render_report.py` turns the summary CSVs into plots and a Markdown report.
+
+### Eval setup
+
+```bash
+cd eval
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### API key loading
+
+The benchmark runner now supports both shell environment variables and a repo-root
+`.env` file. It accepts standard shell format:
+
+```env
+TAVILY_API_KEY=...
+EXA_API_KEY=...
+BRAVE_API_KEY=...
+FIRECRAWL_API_KEY=...
+PARALLEL_API_KEY=...
+OPENAI_API_KEY=...
+```
+
+### Live smoke benchmark
+
+Run one benchmark claim across all configured provider modes:
+
+```bash
+python3 eval/src/run_benchmark.py \
+  --dataset eval/datasets/benchmark_claims.jsonl \
+  --output-file eval/results/live/all_provider_smoke.json \
+  --max-claims 1 \
+  --judge-provider openai
+```
+
+Then execute the notebook against the fresh `eval/results/live/` artifacts:
+
+```bash
+cd eval && source .venv/bin/activate && jupyter nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=python3 notebooks/results_overview.ipynb --output results_overview.executed.ipynb
+```
+
+### Full benchmark + report
+
+```bash
+python3 eval/src/run_benchmark.py \
+  --dataset eval/datasets/benchmark_claims.jsonl \
+  --output-file eval/results/live/benchmark_run.json \
+  --judge-provider openai
+
+python3 eval/src/evaluate_results.py \
+  --artifacts-dir eval/results/live \
+  --output-dir eval/results/live/summary \
+  --latest-per-claim-provider
+
+python3 eval/src/render_report.py \
+  --summary-dir eval/results/live/summary \
+  --report-path eval/results/live/summary/report.md
+```
+
+To generate the notebook graphs from the same run artifacts:
+
+```bash
+cd eval && source .venv/bin/activate && jupyter nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=python3 notebooks/results_overview.ipynb --output results_overview.executed.ipynb
+```
+
+### Current evaluation outputs
+
+The current checked-in outputs live under:
+
+- `eval/results/live/all_provider_smoke.json`
+- `eval/results/live/summary/report.md`
+- `eval/results/live/summary/plots/`
+- `eval/notebooks/results_overview.ipynb`
+
+The notebook is for interactive analysis and can also be executed headlessly
+with `jupyter nbconvert`. The Markdown report is the quick static summary.
+
+### Current pipeline status
+
+The latest smoke run verified that the benchmark pipeline itself works end to end:
+
+- successful on the sample claim: `tavily_research`, `brave_context_plus_judge`, `firecrawl_search_plus_judge`
+- returned normalized error artifacts on the sample claim: `exa_search_structured`, `exa_research_async`, `brave_answers_native`, `parallel_task_run`
+
+That means the artifact format, evaluator, and report generation are working, while some provider adapters still need endpoint-level debugging.
+
 ## Security
 
-- The Tavily API key is read and used only by the background service worker —
-  it is never exposed to page context or content scripts.
-- Both the API key and the research-settings preferences are stored in
-  `chrome.storage.local` on the user's machine.
+- Provider API keys used by the extension are read only by the background service worker and are never exposed to page context or content scripts.
+- Extension keys and provider preferences are stored in `chrome.storage.local` on the user's machine.
+- Eval keys loaded from environment variables or `.env` are used only by the Python benchmark scripts.
 - Rate limiting (10 requests/minute) is enforced before any outbound call.
 - No analytics, no telemetry, no third-party trackers.
 
