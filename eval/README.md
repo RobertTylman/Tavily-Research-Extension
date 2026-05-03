@@ -146,3 +146,42 @@ Use **Export artifacts** to download the current `chrome.storage.local`
 evaluation log as JSON, then place that file under `eval/results/live/` before
 running the evaluator. You can then render the saved graphs with
 `src/render_report.py`.
+
+# Run Evaluation:
+
+```
+cd eval
+source .venv/bin/activate
+pip install -r requirements.txt
+
+export TAVILY_API_KEY=...
+export EXA_API_KEY=...
+export BRAVE_API_KEY=...
+export FIRECRAWL_API_KEY=...
+export PARALLEL_API_KEY=...
+export OPENAI_API_KEY=...
+
+python3 src/run_benchmark.py 
+--dataset /Users/robbietylman/Documents/GitHub/Fact-Checker/eval/datasets/benchmark_claims.jsonl \
+--output-file results/live/10_prompt_all_api.json 
+--providers 
+tavily:tavily_research 
+exa:exa_search_structured 
+exa:exa_research_async 
+brave:brave_context_plus_judge 
+firecrawl:firecrawl_search_plus_judge 
+parallel:parallel_task_run 
+--judge-provider openai 
+--sleep-seconds 1
+
+python3 src/evaluate_results.py 
+--artifacts-dir results/live 
+--output-dir results/live/summary 
+--benchmark-dataset /Users/robbietylman/Documents/GitHub/Fact-Checker/eval/datasets/benchmark_claims.jsonl 
+--latest-per-claim-provider 
+--run-ragas
+
+python3 src/render_report.py 
+--summary-dir results/live/summary 
+--report-path results/live/summary/report.md
+```
