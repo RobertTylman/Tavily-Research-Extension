@@ -44,11 +44,20 @@ to fill in missing benchmark metadata and produce sliced reports such as:
 
 ## Run Ragas scoring
 
-Ragas needs an evaluation LLM and embeddings backend. The script assumes your environment already exposes the keys and client defaults required by your installed Ragas setup.
+Ragas uses OpenAI for both the evaluation LLM and embeddings backend. Set
+`OPENAI_API_KEY` in your shell or in the repo root `.env` as `OPENAI_API_KEY=...`
+or `openai: ...`.
 
 ```bash
-python3 src/evaluate_results.py --artifacts-dir results/live --output-dir results/live/summary --run-ragas
+python3 src/evaluate_results.py \
+  --artifacts-dir results/live \
+  --output-dir results/live/summary \
+  --latest-per-claim-provider \
+  --run-ragas
 ```
+
+By default this uses `gpt-4o-mini` and `text-embedding-3-small`. Override them
+with `--ragas-llm-model` and `--ragas-embedding-model` if needed.
 
 ## Run the benchmark across APIs
 
@@ -68,6 +77,10 @@ python3 src/run_benchmark.py \
   --output-file results/live/benchmark_run.json \
   --judge-provider openai
 ```
+
+The starter dataset currently contains 5 claims. For a 10-prompt run, create a
+JSONL file with 10 rows using the same fields as `datasets/benchmark_claims.jsonl`
+and pass it with `--dataset`.
 
 You can also limit the run while debugging:
 

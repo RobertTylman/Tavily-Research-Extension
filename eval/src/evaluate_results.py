@@ -2,11 +2,40 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
 
 EVAL_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = EVAL_ROOT.parent
+
+
+def load_dotenv_like(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, value = line.split("=", 1)
+        elif ":" in line:
+            key, value = line.split(":", 1)
+        else:
+            continue
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def ensure_openai_api_key() -> None:
+    if os.environ.get("OPENAI_API_KEY"):
+        return
+    dotenv_values = load_dotenv_like(REPO_ROOT / ".env")
+    openai_key = dotenv_values.get("OPENAI_API_KEY") or dotenv_values.get("openai")
+    if openai_key:
+        os.environ["OPENAI_API_KEY"] = openai_key
 
 
 def load_artifacts(artifacts_dir: Path) -> pd.DataFrame:
@@ -283,24 +312,39 @@ def build_ragas_frame(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(ragas_rows)
 
 
-def run_ragas(df: pd.DataFrame) -> pd.DataFrame:
+def run_ragas(
+    df: pd.DataFrame,
+    llm_model: str = "gpt-4o-mini",
+    embedding_model: str = "text-embedding-3-small",
+) -> pd.DataFrame:
     ragas_df = build_ragas_frame(df)
     if ragas_df.empty:
         return pd.DataFrame()
 
+    ensure_openai_api_key()
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise RuntimeError("OPENAI_API_KEY is required when running Ragas with OpenAI.")
+
     try:
         from datasets import Dataset
         from ragas import evaluate
+        from ragas.embeddings.base import LangchainEmbeddingsWrapper
+        from ragas.llms.base import LangchainLLMWrapper
         from ragas.metrics import context_precision, faithfulness, response_relevancy
+        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     except ImportError as exc:
         raise RuntimeError(
             "Ragas or datasets is not installed. Run `pip install -r eval/requirements.txt` first."
         ) from exc
 
+    llm = LangchainLLMWrapper(ChatOpenAI(model=llm_model, temperature=0))
+    embeddings = LangchainEmbeddingsWrapper(OpenAIEmbeddings(model=embedding_model))
     dataset = Dataset.from_pandas(ragas_df[["question", "answer", "contexts", "reference"]])
     result = evaluate(
         dataset=dataset,
         metrics=[context_precision, faithfulness, response_relevancy],
+        llm=llm,
+        embeddings=embeddings,
     )
 
     if hasattr(result, "to_pandas"):
@@ -366,6 +410,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run Ragas metrics over successful artifacts.",
     )
+    parser.add_argument(
+        "--ragas-llm-model",
+        default="gpt-4o-mini",
+        help="OpenAI chat model used by Ragas metrics.",
+    )
+    parser.add_argument(
+        "--ragas-embedding-model",
+        default="text-embedding-3-small",
+        help="OpenAI embedding model used by Ragas metrics.",
+    )
     return parser.parse_args()
 
 
@@ -401,7 +455,15 @@ def main() -> None:
     freshness_summary_df = dimension_summary(normalized, "freshness_bucket")
     confusion_matrix_df = build_confusion_matrix(normalized)
     error_summary_df = error_summary(normalized)
-    ragas_scores = run_ragas(normalized) if args.run_ragas and not normalized.empty else pd.DataFrame()
+    ragas_scores = (
+        run_ragas(
+            normalized,
+            llm_model=args.ragas_llm_model,
+            embedding_model=args.ragas_embedding_model,
+        )
+        if args.run_ragas and not normalized.empty
+        else pd.DataFrame()
+    )
 
     save_outputs(
         normalized,

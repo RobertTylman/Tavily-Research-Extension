@@ -29,6 +29,7 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
 STRUCTURED_VERDICT_SCHEMA: dict[str, Any] = {
+    "type": "object",
     "required": ["verdict", "confidence", "summary", "explanation", "report"],
     "properties": {
         "verdict": {
@@ -1185,7 +1186,7 @@ def run_parallel_task_run(claim: BenchmarkClaim, api_key: str) -> dict[str, Any]
             "input": build_research_prompt(claim.claim),
             "processor": "base",
             "task_spec": {
-                "output_schema": {"type": "json", "json_schema": PARALLEL_STRUCTURED_VERDICT_SCHEMA}
+                "output_schema": PARALLEL_STRUCTURED_VERDICT_SCHEMA
             },
         },
         timeout=120,
