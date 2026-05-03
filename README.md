@@ -18,9 +18,9 @@ The most successful tools are the ones that feel effortless. There’s no better
 </p>
 
  **Project Idea:**
-Lightweight Chrome Extension that fact-checks selected text in-browser and a
-Python evaluation workspace that benchmarks multiple research providers against
-the same normalized verdict contract.
+Lightweight Chrome Extension that runs Tavily's `/research` endpoint on any text you paste or
+select on a webpage, then renders the resulting verdict, summary, and cited
+sources in a popup. Also performs article fact checking with inline annotations.
 
 ## How To Use:
 
