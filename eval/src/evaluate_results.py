@@ -42,9 +42,9 @@ PROVIDER_UNIT_PRICE_DEFAULTS = {
     "parallel_task_run": {
         "cost_units": 1,
         "cost_unit_name": "request",
-        "cost_unit_price": 1.2025,
-        "cost_unit_price_low": 0.005,
-        "cost_unit_price_high": 2.4,
+        "cost_unit_price": 0.01,
+        "cost_unit_price_low": 0.01,
+        "cost_unit_price_high": 0.01,
     },
     "brave_context_plus_judge": {
         "cost_units": 1,
@@ -284,11 +284,22 @@ def normalize_artifacts(df: pd.DataFrame) -> pd.DataFrame:
     for mode, defaults in PROVIDER_UNIT_PRICE_DEFAULTS.items():
         mode_mask = normalized["provider_mode"] == mode
         missing_price = normalized["cost_unit_price"] == 0
+        if mode == "parallel_task_run":
+            missing_price = missing_price | (normalized["cost_unit_price"] >= 1)
         backfill_mask = mode_mask & missing_price
         if not backfill_mask.any():
             continue
         for column, value in defaults.items():
             normalized.loc[backfill_mask, column] = value
+        normalized.loc[backfill_mask, "cost_estimate"] = (
+            normalized.loc[backfill_mask, "cost_units"] * normalized.loc[backfill_mask, "cost_unit_price"]
+        )
+        normalized.loc[backfill_mask, "cost_estimate_low"] = (
+            normalized.loc[backfill_mask, "cost_units"] * normalized.loc[backfill_mask, "cost_unit_price_low"]
+        )
+        normalized.loc[backfill_mask, "cost_estimate_high"] = (
+            normalized.loc[backfill_mask, "cost_units"] * normalized.loc[backfill_mask, "cost_unit_price_high"]
+        )
     normalized["citation_count"] = normalized["citations"].apply(len)
     normalized["source_count"] = normalized["citations"].apply(
         lambda items: len({item.get("url", "") for item in items if isinstance(item, dict)})

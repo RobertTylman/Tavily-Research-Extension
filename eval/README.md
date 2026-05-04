@@ -65,6 +65,45 @@ python3 src/run_benchmark.py \
   --judge-provider openai
 ```
 
+## Full Benchmark And Report
+
+Run the full benchmark, aggregate the latest artifacts per claim/provider mode,
+and render the static Markdown report plus chart images:
+
+```bash
+python3 src/run_benchmark.py \
+  --dataset datasets/benchmark_claims.jsonl \
+  --output-file results/live/benchmark_run.json \
+  --judge-provider openai
+
+python3 src/evaluate_results.py \
+  --artifacts-dir results/live \
+  --output-dir results/live/summary \
+  --latest-per-claim-provider
+
+python3 src/render_report.py \
+  --summary-dir results/live/summary \
+  --report-path results/live/summary/report.md
+```
+
+To include Ragas metrics in the same report, run the evaluator with
+`--run-ragas` before rendering:
+
+```bash
+python3 src/evaluate_results.py \
+  --artifacts-dir results/live \
+  --output-dir results/live/summary \
+  --latest-per-claim-provider \
+  --run-ragas
+
+python3 src/render_report.py \
+  --summary-dir results/live/summary \
+  --report-path results/live/summary/report.md
+```
+
+The generated report lives at `results/live/summary/report.md`, with charts in
+`results/live/summary/plots/`.
+
 ## Provider Modes
 
 Implemented native research-style modes:
@@ -102,7 +141,7 @@ those fields for cost breakdown charts. Current pricing inputs:
 - Tavily: $0.008 per credit.
 - Firecrawl Standard: $83/month for 100,000 credits, or $0.00083 per credit.
 - Exa Deep Search: $12-$15 per 1,000 requests.
-- Parallel: $0.005-$2.40 per request.
+- Parallel: `parallel_task_run` uses `processor=base`, so it is priced as Base research at $10 per 1,000 requests ($0.01/request).
 - Brave Search: $5 per 1,000 requests.
 - Brave Answers: $4 per 1,000 requests plus $5 per million input/output tokens.
 - OpenAI GPT-5.5 judge: $5 per million input tokens, $0.50 per million cached input tokens, and $30 per million output tokens.

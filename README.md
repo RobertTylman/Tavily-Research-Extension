@@ -10,6 +10,8 @@ The most successful tools are the ones that feel effortless. There’s no better
 > a multi-provider evaluation harness for Tavily, Exa, Brave, Firecrawl, and
 > Parallel, plus offline reporting under `eval/`.
 
+## [Install from the Chrome Web Store](https://chromewebstore.google.com/detail/research-assistant/hjadgacmfondhchpdfhgdpfjiapdfege?authuser=0&hl=en)
+
 
 <p align="center">
   <img src="assets/screenshot2.png" width="32%" />
@@ -165,70 +167,8 @@ It does three separate jobs:
 - `evaluate_results.py` aggregates those artifacts into CSV summaries such as provider accuracy, latency, confusion matrices, and error breakdowns.
 - `render_report.py` turns the summary CSVs into plots and a Markdown report.
 
-### Eval setup
-
-```bash
-cd eval
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### API key loading
-
-The benchmark runner now supports both shell environment variables and a repo-root
-`.env` file. It accepts standard shell format:
-
-```env
-TAVILY_API_KEY=...
-EXA_API_KEY=...
-BRAVE_API_KEY=...
-FIRECRAWL_API_KEY=...
-PARALLEL_API_KEY=...
-OPENAI_API_KEY=...
-```
-
-### Live smoke benchmark
-
-Run one benchmark claim across all configured provider modes:
-
-```bash
-python3 eval/src/run_benchmark.py \
-  --dataset eval/datasets/benchmark_claims.jsonl \
-  --output-file eval/results/live/all_provider_smoke.json \
-  --max-claims 1 \
-  --judge-provider openai
-```
-
-Then execute the notebook against the fresh `eval/results/live/` artifacts:
-
-```bash
-cd eval && source .venv/bin/activate && jupyter nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=python3 notebooks/results_overview.ipynb --output results_overview.executed.ipynb
-```
-
-### Full benchmark + report
-
-```bash
-python3 eval/src/run_benchmark.py \
-  --dataset eval/datasets/benchmark_claims.jsonl \
-  --output-file eval/results/live/benchmark_run.json \
-  --judge-provider openai
-
-python3 eval/src/evaluate_results.py \
-  --artifacts-dir eval/results/live \
-  --output-dir eval/results/live/summary \
-  --latest-per-claim-provider
-
-python3 eval/src/render_report.py \
-  --summary-dir eval/results/live/summary \
-  --report-path eval/results/live/summary/report.md
-```
-
-To generate the notebook graphs from the same run artifacts:
-
-```bash
-cd eval && source .venv/bin/activate && jupyter nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=python3 notebooks/results_overview.ipynb --output results_overview.executed.ipynb
-```
+Setup, API key configuration, benchmark commands, Ragas scoring, and report
+rendering instructions live in [`eval/README.md`](./eval/README.md).
 
 ### Current evaluation outputs
 
@@ -239,17 +179,49 @@ The current checked-in outputs live under:
 - `eval/results/live/summary/plots/`
 - `eval/notebooks/results_overview.ipynb`
 
-The notebook is for interactive analysis and can also be executed headlessly
-with `jupyter nbconvert`. The Markdown report is the quick static summary.
+### Evaluation charts
 
-### Current pipeline status
+#### Citation Count Distribution
 
-The latest smoke run verified that the benchmark pipeline itself works end to end:
+Shows how many cited sources each provider returned per benchmark run. This is
+useful for spotting providers that ground answers with richer source sets versus
+providers that return sparse or missing evidence.
 
-- successful on the sample claim: `tavily_research`, `brave_context_plus_judge`, `firecrawl_search_plus_judge`
-- returned normalized error artifacts on the sample claim: `exa_search_structured`, `exa_research_async`, `brave_answers_native`, `parallel_task_run`
+![Citation Count Distribution](eval/results/live/summary/plots/citation_histogram.png)
 
-That means the artifact format, evaluator, and report generation are working, while some provider adapters still need endpoint-level debugging.
+#### Latency By Provider Mode
+
+Compares average response time by provider mode, with spread across the sampled
+claims. Lower latency matters for an in-browser assistant because the user is
+waiting in the popup while research completes.
+
+![Latency By Provider Mode](eval/results/live/summary/plots/latency_distribution.png)
+
+#### Mean Ragas Metrics
+
+Summarizes Ragas scores for retrieved-context quality, answer faithfulness, and
+answer relevancy. This helps separate fast providers from providers that also
+produce evidence that is useful for downstream evaluation.
+
+![Mean Ragas Metrics By Provider Mode](eval/results/live/summary/plots/ragas_means.png)
+
+#### Unit Price
+
+Shows the normalized request or credit price used by the benchmark cost model.
+This chart is meant for provider-level cost comparison, not exact monthly spend. Numbers may vary based on query complexity.
+
+![Unit Price By Provider Mode](eval/results/live/summary/plots/unit_price.png)
+
+### For the full evaluation with generated reports and references, see [`eval/results/live/summary/report.md`](eval/results/live/summary/report.md).
+
+### Provider choice
+
+This extension uses Tavily because it offers the best overall combination for
+the product: low latency, predictable cost, easy-to-understand documentation,
+and a generous free tier for early usage and testing. Other providers are
+legitimate competition, especially Parallel for deeper research-style tasks, but
+Tavily remains a strong fit for a browser extension where speed, source-backed
+answers, and simple integration matter most.
 
 ## Security
 
@@ -263,7 +235,4 @@ That means the artifact format, evaluator, and report generation are working, wh
 
 MIT
 
-## Acknowledgments
-
-- [Tavily](https://tavily.com) for the research API
-- Built with React, TypeScript, and Vite
+#### Built by [Robert Tylman](https://roberttylman.github.io/portfolio-site/)

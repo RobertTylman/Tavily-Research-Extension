@@ -15,14 +15,30 @@ import seaborn as sns
 EVAL_ROOT = Path(__file__).resolve().parent.parent
 PROVIDER_PALETTE = "Set2"
 
+PROVIDER_MODE_LABELS = {
+    ("tavily", "tavily_research"): "tavily - Research API (mini)",
+    ("exa", "exa_search_structured"): "exa - Search API (auto + outputSchema)",
+    ("exa", "exa_deep_research"): "exa - Search API (deep-reasoning + outputSchema)",
+    ("exa", "exa_research_async"): "exa - Research API (exa-research)",
+    ("parallel", "parallel_task_run"): "parallel - Tasks Runs API (processor: base)",
+    ("brave", "brave_context_plus_judge"): "brave - LLM Context API + OpenAI judge",
+    ("brave", "brave_answers_native"): "brave - Answers API (model: brave)",
+    ("firecrawl", "firecrawl_search_plus_judge"): "firecrawl - Search API v2 (markdown scrape) + OpenAI judge",
+}
+
 
 def provider_mode_label(row: pd.Series) -> str:
     provider = str(row.get("provider", "")).strip()
-    mode = str(row.get("provider_mode", "")).strip().replace("_", " ")
+    raw_mode = str(row.get("provider_mode", "")).strip()
+    label = PROVIDER_MODE_LABELS.get((provider, raw_mode))
+    if label:
+        return label
+    mode = raw_mode.replace("_", " ")
     return f"{provider} - {mode}"
 
 
 def add_value_labels(ax: plt.Axes, unit: str = "", precision: int = 1) -> None:
+    padding = 10 if unit == "dollars" else 4
     for container in ax.containers:
         if not hasattr(container, "datavalues"):
             continue
@@ -34,11 +50,13 @@ def add_value_labels(ax: plt.Axes, unit: str = "", precision: int = 1) -> None:
                 labels.append(f"{value:.0%}")
             elif unit == "cents":
                 labels.append(f"{value:.{precision}f}¢")
+            elif unit == "dollars":
+                labels.append(f"${value:.{precision}f}")
             elif unit == "seconds":
                 labels.append(f"{value:.{precision}f}s")
             else:
                 labels.append(f"{value:.{precision}f}")
-        ax.bar_label(container, labels=labels, padding=4, fontsize=9)
+        ax.bar_label(container, labels=labels, padding=padding, fontsize=9)
 
 
 def style_axis(ax: plt.Axes) -> None:
@@ -75,8 +93,11 @@ def save_plot(fig: plt.Figure, output_path: Path) -> None:
 def plot_provider_accuracy(summary: pd.DataFrame, output_dir: Path) -> list[str]:
     if summary.empty:
         return []
-    fig, ax = plt.subplots(figsize=(12, max(5, len(summary) * 0.55)))
-    chart_df = summary.sort_values(["verdict_accuracy", "success_rate"], ascending=[False, False]).copy()
+    chart_df = summary[summary["provider"] != "firecrawl"].copy()
+    if chart_df.empty:
+        return []
+    fig, ax = plt.subplots(figsize=(12, max(5, len(chart_df) * 0.55)))
+    chart_df = chart_df.sort_values(["verdict_accuracy", "success_rate"], ascending=[False, False])
     chart_df["label"] = chart_df.apply(provider_mode_label, axis=1)
     sns.barplot(
         data=chart_df,
@@ -93,6 +114,15 @@ def plot_provider_accuracy(summary: pd.DataFrame, output_dir: Path) -> list[str]
     ax.set_xlim(0, max(1.0, chart_df["verdict_accuracy"].max() * 1.08))
     add_value_labels(ax, unit="percent", precision=0)
     ax.legend(title="Provider", bbox_to_anchor=(1.02, 1), loc="upper left", frameon=False)
+    fig.text(
+        0.01,
+        0.01,
+        "firecrawl - Search API v2 (markdown scrape) + OpenAI judge omitted: Firecrawl did not return context, so verdict accuracy is not meaningful.",
+        ha="left",
+        va="bottom",
+        fontsize=9,
+        color="#4b5563",
+    )
     style_axis(ax)
     path = output_dir / "provider_accuracy.png"
     save_plot(fig, path)
@@ -148,23 +178,43 @@ def plot_latency_distribution(details: pd.DataFrame, output_dir: Path) -> list[s
         return []
     latency = details.copy()
     latency["latency_s"] = latency["latency_ms"] / 1000
-    latency["label"] = latency.apply(provider_mode_label, axis=1)
-    latency = latency.sort_values("latency_s", ascending=True)
-    fig, ax = plt.subplots(figsize=(12, max(5, len(latency) * 0.55)))
-    sns.scatterplot(
-        data=latency,
-        x="latency_s",
+    grouped = (
+        latency.groupby(["provider", "provider_mode"], dropna=False)
+        .agg(
+            mean_latency_s=("latency_s", "mean"),
+            min_latency_s=("latency_s", "min"),
+            max_latency_s=("latency_s", "max"),
+            runs=("latency_s", "count"),
+        )
+        .reset_index()
+    )
+    grouped["label"] = grouped.apply(provider_mode_label, axis=1)
+    grouped = grouped.sort_values("mean_latency_s", ascending=True)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    sns.barplot(
+        data=grouped,
+        x="mean_latency_s",
         y="label",
         hue="provider",
         palette=PROVIDER_PALETTE,
-        s=140,
         ax=ax,
     )
-    for _, row in latency.iterrows():
-        ax.hlines(row["label"], xmin=0, xmax=row["latency_s"], color="#c7cedb", linewidth=2, zorder=0)
+    y_positions = ax.get_yticks()
+    lower_errors = (grouped["mean_latency_s"] - grouped["min_latency_s"]).clip(lower=0)
+    upper_errors = (grouped["max_latency_s"] - grouped["mean_latency_s"]).clip(lower=0)
+    ax.errorbar(
+        grouped["mean_latency_s"],
+        y_positions,
+        xerr=[lower_errors.to_numpy(), upper_errors.to_numpy()],
+        fmt="none",
+        ecolor="#30343b",
+        elinewidth=1,
+        capsize=3,
+    )
+    for _, row in grouped.iterrows():
         ax.annotate(
-            f"{row['latency_s']:.1f}s",
-            (row["latency_s"], row["label"]),
+            f"{row['mean_latency_s']:.1f}s",
+            (row["mean_latency_s"], row["label"]),
             xytext=(8, 0),
             textcoords="offset points",
             va="center",
@@ -186,12 +236,6 @@ def plot_cost(summary: pd.DataFrame, output_dir: Path) -> list[str]:
     cost_df = summary[summary["mean_cost_estimate"].fillna(0) > 0].copy()
     if cost_df.empty:
         return []
-    
-    # Convert to cents
-    for col in ["mean_cost_estimate", "mean_cost_estimate_low", "mean_cost_estimate_high"]:
-        if col in cost_df.columns:
-            cost_df[col] = cost_df[col] * 100
-
     cost_df["label"] = cost_df.apply(provider_mode_label, axis=1)
     cost_df = cost_df.sort_values("mean_cost_estimate", ascending=True)
     fig, ax = plt.subplots(figsize=(12, max(5, len(cost_df) * 0.55)))
@@ -220,10 +264,12 @@ def plot_cost(summary: pd.DataFrame, output_dir: Path) -> list[str]:
             capsize=4,
         )
     ax.set_title("Mean Cost Per Run By Provider Mode")
-    ax.set_xlabel("Mean cost per run (¢ USD)")
+    ax.set_xlabel("Mean cost per run ($ USD)")
     ax.set_ylabel("")
-    ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}¢"))
-    add_value_labels(ax, unit="cents", precision=2)
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"${value:.4f}"))
+    add_value_labels(ax, unit="dollars", precision=4)
+    left, right = ax.get_xlim()
+    ax.set_xlim(left, right * 1.22)
     ax.legend(title="Provider", bbox_to_anchor=(1.02, 1), loc="upper left", frameon=False)
     style_axis(ax)
     path = output_dir / "mean_cost.png"
@@ -237,12 +283,6 @@ def plot_unit_price(summary: pd.DataFrame, output_dir: Path) -> list[str]:
     price_df = summary[summary["mean_cost_unit_price"].fillna(0) > 0].copy()
     if price_df.empty:
         return []
-    
-    # Convert to cents
-    for col in ["mean_cost_unit_price", "mean_cost_unit_price_low", "mean_cost_unit_price_high"]:
-        if col in price_df.columns:
-            price_df[col] = price_df[col] * 100
-
     price_df["label"] = price_df.apply(provider_mode_label, axis=1)
     price_df = price_df.sort_values("mean_cost_unit_price", ascending=True)
     fig, ax = plt.subplots(figsize=(12, max(5, len(price_df) * 0.55)))
@@ -271,16 +311,19 @@ def plot_unit_price(summary: pd.DataFrame, output_dir: Path) -> list[str]:
             capsize=4,
         )
     ax.set_title("Unit Price By Provider Mode")
-    ax.set_xlabel("Unit price (¢ USD)")
+    ax.set_xlabel("Unit price ($ USD)")
     ax.set_ylabel("")
-    ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}¢"))
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"${value:.4f}"))
     if price_df["mean_cost_unit_price"].max() / max(price_df["mean_cost_unit_price"].min(), 1e-9) > 100:
         ax.set_xscale("log")
-        ax.set_xlabel("Unit price (¢ USD, log scale)")
+        ax.set_xlabel("Unit price ($ USD, log scale)")
         left, right = ax.get_xlim()
-        ax.set_xlim(left, right * 1.8)
-    ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}¢"))
-    add_value_labels(ax, unit="cents", precision=3)
+        ax.set_xlim(left, right * 2.2)
+    else:
+        left, right = ax.get_xlim()
+        ax.set_xlim(left, right * 1.22)
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"${value:.4f}"))
+    add_value_labels(ax, unit="dollars", precision=4)
     ax.legend(title="Provider", bbox_to_anchor=(1.02, 1), loc="upper left", frameon=False)
     style_axis(ax)
     path = output_dir / "unit_price.png"
@@ -391,8 +434,11 @@ def plot_ragas(ragas_scores: pd.DataFrame, output_dir: Path) -> list[str]:
     ).dropna(subset=["score"])
     if melted.empty:
         return []
-    heatmap = ragas_means.set_index("label")[score_cols]
-    fig, ax = plt.subplots(figsize=(10, max(5, ragas_means.shape[0] * 0.55)))
+    heatmap_means = ragas_means[ragas_means["provider"] != "firecrawl"].copy()
+    if heatmap_means.empty:
+        return outputs
+    heatmap = heatmap_means.set_index("label")[score_cols]
+    fig, ax = plt.subplots(figsize=(10, max(5, heatmap_means.shape[0] * 0.55)))
     sns.heatmap(
         heatmap,
         annot=True,
@@ -408,6 +454,15 @@ def plot_ragas(ragas_scores: pd.DataFrame, output_dir: Path) -> list[str]:
     ax.set_title("Mean Ragas Metrics By Provider Mode")
     ax.set_xlabel("")
     ax.set_ylabel("")
+    fig.text(
+        0.01,
+        0.01,
+        "firecrawl - Search API v2 (markdown scrape) + OpenAI judge omitted: Firecrawl does not return context, so context-based Ragas metrics are not meaningful.",
+        ha="left",
+        va="bottom",
+        fontsize=9,
+        color="#4b5563",
+    )
     path = output_dir / "ragas_means.png"
     save_plot(fig, path)
     outputs.append(path.name)
@@ -453,33 +508,40 @@ def write_markdown_report(
 ) -> None:
     lines = ["# Evaluation Report", ""]
     if not summary.empty:
-        best = summary.sort_values(["verdict_accuracy", "success_rate"], ascending=[False, False]).head(5)
-        lines.extend(["## Top Provider Modes", "", best.to_markdown(index=False), ""])
+        report_summary = summary.copy()
+        report_summary["provider_label"] = report_summary.apply(provider_mode_label, axis=1)
+        best = report_summary.sort_values(["verdict_accuracy", "success_rate"], ascending=[False, False]).head(5)
+        best_columns = [
+            column
+            for column in ["provider_label", "runs", "success_rate", "verdict_accuracy", "mean_latency_ms", "mean_citations"]
+            if column in best.columns
+        ]
+        lines.extend(["## Top Provider Modes", "", best[best_columns].to_markdown(index=False), ""])
         cost_summary = summary[summary["mean_cost_estimate"].fillna(0) > 0].sort_values("mean_cost_estimate").copy()
         if not cost_summary.empty:
-            for source, target in [
-                ("mean_cost_unit_price", "mean_unit_price_cents_usd"),
-                ("mean_cost_unit_price_low", "mean_unit_price_low_cents_usd"),
-                ("mean_cost_unit_price_high", "mean_unit_price_high_cents_usd"),
-                ("mean_cost_estimate", "mean_cost_cents_usd"),
-                ("mean_cost_estimate_low", "mean_cost_low_cents_usd"),
-                ("mean_cost_estimate_high", "mean_cost_high_cents_usd"),
+            cost_summary["provider_label"] = cost_summary.apply(provider_mode_label, axis=1)
+            for column in [
+                "mean_cost_unit_price",
+                "mean_cost_unit_price_low",
+                "mean_cost_unit_price_high",
+                "mean_cost_estimate",
+                "mean_cost_estimate_low",
+                "mean_cost_estimate_high",
             ]:
-                if source in cost_summary.columns:
-                    cost_summary[target] = cost_summary[source] * 100
+                if column in cost_summary.columns:
+                    cost_summary[column] = cost_summary[column].map(lambda value: f"${value:.4f}" if pd.notna(value) else "")
             cost_columns = [
                 column
                 for column in [
-                    "provider",
-                    "provider_mode",
+                    "provider_label",
                     "mean_cost_units",
                     "cost_unit_name",
-                    "mean_unit_price_cents_usd",
-                    "mean_unit_price_low_cents_usd",
-                    "mean_unit_price_high_cents_usd",
-                    "mean_cost_cents_usd",
-                    "mean_cost_low_cents_usd",
-                    "mean_cost_high_cents_usd",
+                    "mean_cost_unit_price",
+                    "mean_cost_unit_price_low",
+                    "mean_cost_unit_price_high",
+                    "mean_cost_estimate",
+                    "mean_cost_estimate_low",
+                    "mean_cost_estimate_high",
                 ]
                 if column in cost_summary.columns
             ]
@@ -496,21 +558,27 @@ def write_markdown_report(
                 .agg(lambda values: values.notna().sum())
                 .reset_index()
             )
+            coverage["provider_label"] = coverage.apply(provider_mode_label, axis=1)
+            coverage_columns = ["provider_label", *score_cols]
             lines.extend(
                 [
                     "## Ragas Coverage",
                     "",
                     "Ragas charts include only rows in `ragas_scores.csv`. Missing bars usually mean the metric column was not produced by the installed Ragas version or the score was `NaN` for that provider response.",
                     "",
-                    coverage.to_markdown(index=False),
+                    "Firecrawl is not producing meaningful `context_precision` or `answer_relevancy` in this run because the Firecrawl artifacts contain empty `retrieved_contexts` and zero citations for every sampled claim. The Firecrawl adapter sends `/v2/search` results into Ragas as evidence passages; when that result set is empty, Ragas has no retrieved evidence to evaluate for context precision. The OpenAI judge then receives no evidence and returns an insufficient-evidence refusal, which is not semantically close to the benchmark reference answer, so answer relevancy scores zero. The fix is to debug the Firecrawl search/scrape response path so it writes markdown snippets or scraped page text into `retrieved_contexts` before judging.",
+                    "",
+                    coverage[coverage_columns].to_markdown(index=False),
                     "",
                 ]
             )
     if not error_summary.empty:
         lines.extend(["## Error Summary", "", error_summary.head(10).to_markdown(index=False), ""])
     if not details.empty:
-        longest = details.sort_values("latency_ms", ascending=False).head(10)[
-            ["provider", "provider_mode", "claim_id", "response_verdict", "reference_verdict", "latency_ms", "status"]
+        slowest = details.copy()
+        slowest["provider_label"] = slowest.apply(provider_mode_label, axis=1)
+        longest = slowest.sort_values("latency_ms", ascending=False).head(10)[
+            ["provider_label", "claim_id", "response_verdict", "reference_verdict", "latency_ms", "status"]
         ]
         lines.extend(["## Slowest Runs", "", longest.to_markdown(index=False), ""])
     if plot_files:
@@ -521,20 +589,36 @@ def write_markdown_report(
     
     if not details.empty:
         lines.extend(["## Detailed Model Responses", ""])
-        # Group by provider and mode to make it readable
-        for (provider, mode), group in details.groupby(["provider", "provider_mode"]):
-            lines.extend([f"### {provider} - {mode}", ""])
+        details = details.copy()
+        details["provider_label"] = details.apply(provider_mode_label, axis=1)
+        for index, (provider_label, group) in enumerate(details.groupby("provider_label", sort=True)):
+            if index:
+                lines.extend(["---", ""])
+            summary_bits = []
+            if "status" in group.columns:
+                summary_bits.append(f"{int(group['status'].eq('success').sum())}/{len(group)} successful")
+            if "citation_count" in group.columns:
+                summary_bits.append(f"{group['citation_count'].fillna(0).mean():.1f} mean citations")
+            if "latency_ms" in group.columns:
+                summary_bits.append(f"{group['latency_ms'].fillna(0).mean() / 1000:.1f}s mean latency")
+            lines.extend([f"### {provider_label}", ""])
+            if summary_bits:
+                lines.extend([f"_{' | '.join(summary_bits)}_", ""])
             for _, row in group.iterrows():
                 claim_text = row.get("claim_text") or "N/A"
+                claim_id = row.get("claim_id") or row.get("id") or "N/A"
                 verdict = row.get("response_verdict") or "N/A"
+                reference_verdict = row.get("reference_verdict") or "N/A"
                 confidence = row.get("response_confidence") or "N/A"
                 response_text = row.get("response_text") or "No text generated."
                 
+                lines.append(f"#### {claim_id}")
+                lines.append("")
                 lines.append(f"**Claim:** {claim_text}")
-                lines.append(f"**Verdict:** {verdict} (Confidence: {confidence})")
+                lines.append(f"**Verdict:** {verdict} | **Reference:** {reference_verdict} | **Confidence:** {confidence}")
                 lines.append("")
                 lines.append("**Full Response:**")
-                lines.append("---")
+                lines.append("")
                 lines.append(response_text)
                 lines.append("---")
                 lines.append("")

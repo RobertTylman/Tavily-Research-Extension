@@ -140,8 +140,7 @@ TAVILY_USD_PER_CREDIT = 0.008
 FIRECRAWL_STANDARD_USD_PER_CREDIT = 83 / 100_000
 EXA_DEEP_USD_PER_REQUEST_LOW = 12 / 1_000
 EXA_DEEP_USD_PER_REQUEST_HIGH = 15 / 1_000
-PARALLEL_USD_PER_REQUEST_LOW = 0.005
-PARALLEL_USD_PER_REQUEST_HIGH = 2.4
+PARALLEL_BASE_USD_PER_REQUEST = 10 / 1_000
 BRAVE_SEARCH_USD_PER_REQUEST = 5 / 1_000
 BRAVE_ANSWERS_USD_PER_REQUEST = 4 / 1_000
 BRAVE_ANSWERS_USD_PER_MILLION_INPUT_TOKENS = 5
@@ -544,12 +543,10 @@ def firecrawl_cost_payload(credits: float) -> dict[str, Any]:
 
 def parallel_cost_payload() -> dict[str, Any]:
     return build_cost_payload(
-        None,
+        PARALLEL_BASE_USD_PER_REQUEST,
         units=1,
         unit_name="request",
-        low_unit_price=PARALLEL_USD_PER_REQUEST_LOW,
-        high_unit_price=PARALLEL_USD_PER_REQUEST_HIGH,
-        method="Parallel pricing is $0.005-$2.40 per request.",
+        method="Parallel Task API uses processor=base; Chat Research Base pricing is $10 per 1k requests ($0.01/request).",
     )
 
 
