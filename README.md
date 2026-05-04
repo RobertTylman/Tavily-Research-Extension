@@ -172,9 +172,8 @@ rendering instructions live in [`eval/README.md`](./eval/README.md).
 
 ### Current evaluation outputs
 
-The current checked-in outputs live under:
+The current checked-in static evaluation outputs live under:
 
-- `eval/results/live/all_provider_smoke.json`
 - `eval/results/live/summary/report.md`
 - `eval/results/live/summary/plots/`
 - `eval/notebooks/results_overview.ipynb`

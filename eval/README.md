@@ -10,7 +10,7 @@ This folder contains the offline evaluation pipeline for the multi-provider fact
 - `src/evaluate_results.py`: loads artifacts, computes summary stats, and optionally runs Ragas.
 - `src/render_report.py`: converts summary CSVs into saved plots and a markdown report.
 - `notebooks/results_overview.ipynb`: visual report with charts for provider quality, latency, and error analysis.
-- `results/`: generated benchmark artifacts, summaries, and plots. This directory is ignored by git.
+- `results/`: generated benchmark artifacts, summaries, and plots. Raw run artifacts are ignored by git; the static summary report and plot PNGs can be checked in for README previews.
 
 ## Install
 
@@ -226,9 +226,8 @@ This writes PNG charts under `results/live/summary/plots/`, including:
 
 - provider accuracy bars
 - success-rate vs latency scatter
-- latency distribution boxplots
+- latency by provider mode
 - confusion matrix heatmap
-- topic and freshness accuracy heatmaps
 - citation count histogram
 - optional Ragas charts when `ragas_scores.csv` exists
 

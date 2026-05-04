@@ -102,48 +102,6 @@ export const PARALLEL_STRUCTURED_VERDICT_SCHEMA: Record<string, unknown> = {
   },
 };
 
-export const PARALLEL_STRUCTURED_VERDICT_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  required: ['verdict', 'confidence', 'summary', 'explanation', 'report'],
-  properties: {
-    verdict: {
-      type: 'string',
-      enum: VERDICT_ENUM,
-      description:
-        'Final verdict on the claim. SUPPORTED if strong evidence confirms it, FALSE if strong evidence contradicts it, MISLEADING if the claim is partly true but deceptive, INSUFFICIENT_EVIDENCE when reliable sources cannot settle it.',
-    },
-    confidence: {
-      type: 'number',
-      description:
-        'Calibrated confidence in the verdict between 0 and 1. Use lower values when evidence conflicts, is stale, or only partially supports the claim.',
-    },
-    summary: {
-      type: 'string',
-      description: 'One or two sentence plain-English summary of the verdict for end users.',
-    },
-    explanation: {
-      type: 'string',
-      description:
-        'Short paragraph (2-4 sentences) explaining why the verdict was reached, referencing the strongest evidence.',
-    },
-    report: {
-      type: 'string',
-      description:
-        'Concise fact-check report written in Markdown. Include an Executive Summary, the most important supporting or contradicting evidence with inline numbered citations like [1], and a brief caveats section when relevant.',
-    },
-    key_findings: {
-      type: 'array',
-      items: { type: 'string' },
-      description: '3-5 bullet-style findings that back up the verdict.',
-    },
-    warnings: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Important caveats a reader should know about.',
-    },
-  },
-};
-
 export interface StructuredVerdictPayload {
   verdict: VerdictLabel;
   confidence: number;

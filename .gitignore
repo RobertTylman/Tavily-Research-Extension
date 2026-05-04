@@ -30,7 +30,14 @@ eval/.venv/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-eval/results/
+eval/results/*
+!eval/results/live/
+eval/results/live/*
+!eval/results/live/summary/
+eval/results/live/summary/*
+!eval/results/live/summary/report.md
+!eval/results/live/summary/plots/
+!eval/results/live/summary/plots/*.png
 eval/eval/results/
 
 # Source maps (optional - remove if you want them in repo)
