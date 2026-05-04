@@ -1,0 +1,15 @@
+# Local environment
+.venv/
+venv/
+
+# Generated benchmark artifacts
+results/
+eval/results/
+
+# Python and notebook cache
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Locally executed notebook exports
+notebooks/*.executed.ipynb
