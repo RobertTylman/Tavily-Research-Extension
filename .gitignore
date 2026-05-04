@@ -43,6 +43,13 @@ __pycache__/
 
 # Evaluation outputs
 eval/results/*
+!eval/results/live/
+eval/results/live/*
+!eval/results/live/summary/
+eval/results/live/summary/*
+!eval/results/live/summary/report.md
+!eval/results/live/summary/plots/
+!eval/results/live/summary/plots/*.png
 eval/eval/results/
 
 # Local agent/tool workspaces

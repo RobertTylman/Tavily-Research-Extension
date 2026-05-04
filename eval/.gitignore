@@ -1,0 +1,22 @@
+# Local environment
+.venv/
+venv/
+
+# Generated benchmark artifacts. Keep static report assets versionable for README links.
+results/*
+!results/live/
+results/live/*
+!results/live/summary/
+results/live/summary/*
+!results/live/summary/report.md
+!results/live/summary/plots/
+!results/live/summary/plots/*.png
+eval/results/
+
+# Python and notebook cache
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Locally executed notebook exports
+notebooks/*.executed.ipynb
