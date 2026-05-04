@@ -6,7 +6,7 @@
 
 The most successful tools are the ones that feel effortless. There’s no better place to do research than directly in your browser, one click away.
 
-> **Note:** This project started as a Tavily-focused extension and now includes
+> **Note:** This project is deployed as a Tavily API based extension but includes
 > a multi-provider evaluation harness for Tavily, Exa, Brave, Firecrawl, and
 > Parallel, plus offline reporting under `eval/`.
 
