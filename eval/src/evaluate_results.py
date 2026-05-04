@@ -10,6 +10,135 @@ import pandas as pd
 EVAL_ROOT = Path(__file__).resolve().parent.parent
 REPO_ROOT = EVAL_ROOT.parent
 
+PROVIDER_UNIT_PRICE_DEFAULTS = {
+    "tavily_research": {
+        "cost_units": 0,
+        "cost_unit_name": "credit",
+        "cost_unit_price": 0.008,
+        "cost_unit_price_low": 0.008,
+        "cost_unit_price_high": 0.008,
+    },
+    "exa_search_structured": {
+        "cost_units": 1,
+        "cost_unit_name": "request",
+        "cost_unit_price": 0.0135,
+        "cost_unit_price_low": 0.012,
+        "cost_unit_price_high": 0.015,
+    },
+    "exa_deep_research": {
+        "cost_units": 1,
+        "cost_unit_name": "request",
+        "cost_unit_price": 0.0135,
+        "cost_unit_price_low": 0.012,
+        "cost_unit_price_high": 0.015,
+    },
+    "exa_research_async": {
+        "cost_units": 1,
+        "cost_unit_name": "request",
+        "cost_unit_price": 0.0135,
+        "cost_unit_price_low": 0.012,
+        "cost_unit_price_high": 0.015,
+    },
+    "parallel_task_run": {
+        "cost_units": 1,
+        "cost_unit_name": "request",
+        "cost_unit_price": 1.2025,
+        "cost_unit_price_low": 0.005,
+        "cost_unit_price_high": 2.4,
+    },
+    "brave_context_plus_judge": {
+        "cost_units": 1,
+        "cost_unit_name": "request",
+        "cost_unit_price": 0.005,
+        "cost_unit_price_low": 0.005,
+        "cost_unit_price_high": 0.005,
+    },
+    "brave_answers_native": {
+        "cost_units": 1,
+        "cost_unit_name": "request",
+        "cost_unit_price": 0.004,
+        "cost_unit_price_low": 0.004,
+        "cost_unit_price_high": 0.004,
+    },
+    "firecrawl_search_plus_judge": {
+        "cost_units": 7,
+        "cost_unit_name": "credit",
+        "cost_unit_price": 0.00083,
+        "cost_unit_price_low": 0.00083,
+        "cost_unit_price_high": 0.00083,
+    },
+}
+
+
+def clean_context_text(value: object, max_chars: int = 6000) -> str:
+    if not isinstance(value, str):
+        return ""
+    words = [
+        word
+        for word in value.replace("\x00", " ").split()
+        if not word.startswith(("http://", "https://"))
+    ]
+    text = " ".join(words)
+    if not text:
+        return ""
+    return text[:max_chars]
+
+
+def useful_context(value: object, min_chars: int = 40) -> str:
+    text = clean_context_text(value)
+    if len(text) < min_chars:
+        return ""
+    return text
+
+
+def citation_contexts(citations: object, min_chars: int = 40) -> list[str]:
+    if not isinstance(citations, list):
+        return []
+    contexts: list[str] = []
+    seen: set[str] = set()
+    for citation in citations:
+        if not isinstance(citation, dict):
+            continue
+        text = (
+            useful_context(citation.get("context"), min_chars=min_chars)
+            or useful_context(citation.get("snippet"), min_chars=min_chars)
+        )
+        if text and text == citation.get("title"):
+            text = ""
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        contexts.append(text)
+    return contexts
+
+
+def normalize_context_list(contexts: object, citations: object) -> list[str]:
+    citation_titles: set[str] = set()
+    citation_urls: set[str] = set()
+    if isinstance(citations, list):
+        for citation in citations:
+            if isinstance(citation, dict):
+                title = clean_context_text(citation.get("title"))
+                url = clean_context_text(citation.get("url"))
+                if title:
+                    citation_titles.add(title)
+                if url:
+                    citation_urls.add(url)
+    if isinstance(contexts, list):
+        normalized = [useful_context(item) for item in contexts]
+        normalized = [
+            item
+            for item in normalized
+            if item and item not in citation_titles and item not in citation_urls
+        ]
+    else:
+        normalized = []
+    if sum(len(item) for item in normalized) < 500:
+        for context in citation_contexts(citations):
+            if context not in normalized:
+                normalized.append(context)
+    return normalized
+
 
 def load_dotenv_like(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -83,9 +212,13 @@ def normalize_artifacts(df: pd.DataFrame) -> pd.DataFrame:
     normalized["citations"] = normalized.get("citations", pd.Series(index=normalized.index)).apply(
         lambda value: value if isinstance(value, list) else []
     )
-    normalized["retrieved_contexts"] = normalized.get(
+    raw_contexts = normalized.get(
         "retrieved_contexts", pd.Series(index=normalized.index)
-    ).apply(lambda value: value if isinstance(value, list) else [])
+    )
+    normalized["retrieved_contexts"] = [
+        normalize_context_list(contexts, citations)
+        for contexts, citations in zip(raw_contexts, normalized["citations"], strict=False)
+    ]
 
     normalized["claim_id"] = normalized["claim"].apply(lambda value: value.get("id", ""))
     normalized["claim_text"] = normalized["claim"].apply(lambda value: value.get("text", ""))
@@ -101,6 +234,29 @@ def normalize_artifacts(df: pd.DataFrame) -> pd.DataFrame:
     normalized["latency_ms"] = pd.to_numeric(
         normalized.get("latency_ms", pd.Series(index=normalized.index)), errors="coerce"
     ).fillna(0)
+    normalized["cost_units"] = pd.to_numeric(
+        normalized.get("cost_units", pd.Series(index=normalized.index)), errors="coerce"
+    ).fillna(0)
+    normalized["cost_unit_name"] = normalized.get(
+        "cost_unit_name", pd.Series(index=normalized.index)
+    ).fillna("")
+    normalized["cost_unit_price"] = pd.to_numeric(
+        normalized.get("cost_unit_price", pd.Series(index=normalized.index)), errors="coerce"
+    ).fillna(0)
+    normalized["cost_unit_price_low"] = pd.to_numeric(
+        normalized.get(
+            "cost_unit_price_low",
+            normalized.get("cost_unit_price", pd.Series(index=normalized.index)),
+        ),
+        errors="coerce",
+    ).fillna(normalized["cost_unit_price"])
+    normalized["cost_unit_price_high"] = pd.to_numeric(
+        normalized.get(
+            "cost_unit_price_high",
+            normalized.get("cost_unit_price", pd.Series(index=normalized.index)),
+        ),
+        errors="coerce",
+    ).fillna(normalized["cost_unit_price"])
     normalized["cost_estimate"] = pd.to_numeric(
         normalized.get("cost_estimate", pd.Series(index=normalized.index)), errors="coerce"
     ).fillna(0)
@@ -115,6 +271,24 @@ def normalize_artifacts(df: pd.DataFrame) -> pd.DataFrame:
     normalized["cost_estimate_method"] = normalized.get(
         "cost_estimate_method", pd.Series(index=normalized.index)
     ).fillna("")
+    unobserved_tavily_research_cost = (
+        (normalized["provider_mode"] == "tavily_research")
+        & (normalized["cost_units"] == 0)
+        & normalized["cost_estimate_method"].str.contains("boundaries|exact request credits were not returned", case=False, na=False)
+    )
+    if unobserved_tavily_research_cost.any():
+        normalized.loc[
+            unobserved_tavily_research_cost,
+            ["cost_estimate", "cost_estimate_low", "cost_estimate_high"],
+        ] = 0
+    for mode, defaults in PROVIDER_UNIT_PRICE_DEFAULTS.items():
+        mode_mask = normalized["provider_mode"] == mode
+        missing_price = normalized["cost_unit_price"] == 0
+        backfill_mask = mode_mask & missing_price
+        if not backfill_mask.any():
+            continue
+        for column, value in defaults.items():
+            normalized.loc[backfill_mask, column] = value
     normalized["citation_count"] = normalized["citations"].apply(len)
     normalized["source_count"] = normalized["citations"].apply(
         lambda items: len({item.get("url", "") for item in items if isinstance(item, dict)})
@@ -215,6 +389,11 @@ def provider_summary(df: pd.DataFrame) -> pd.DataFrame:
             median_latency_ms=("latency_ms", "median"),
             mean_citations=("citation_count", "mean"),
             mean_sources=("source_count", "mean"),
+            mean_cost_units=("cost_units", "mean"),
+            cost_unit_name=("cost_unit_name", lambda values: ", ".join(sorted({str(value) for value in values if str(value)}))),
+            mean_cost_unit_price=("cost_unit_price", "mean"),
+            mean_cost_unit_price_low=("cost_unit_price_low", "mean"),
+            mean_cost_unit_price_high=("cost_unit_price_high", "mean"),
             mean_cost_estimate=("cost_estimate", "mean"),
             mean_cost_estimate_low=("cost_estimate_low", "mean"),
             mean_cost_estimate_high=("cost_estimate_high", "mean"),
@@ -247,6 +426,11 @@ def dimension_summary(df: pd.DataFrame, dimension: str) -> pd.DataFrame:
             runs=("id", "count"),
             success_rate=("status", lambda values: (values == "success").mean()),
             mean_latency_ms=("latency_ms", "mean"),
+            mean_cost_units=("cost_units", "mean"),
+            cost_unit_name=("cost_unit_name", lambda values: ", ".join(sorted({str(value) for value in values if str(value)}))),
+            mean_cost_unit_price=("cost_unit_price", "mean"),
+            mean_cost_unit_price_low=("cost_unit_price_low", "mean"),
+            mean_cost_unit_price_high=("cost_unit_price_high", "mean"),
             mean_cost_estimate=("cost_estimate", "mean"),
             mean_cost_estimate_low=("cost_estimate_low", "mean"),
             mean_cost_estimate_high=("cost_estimate_high", "mean"),
@@ -328,21 +512,27 @@ def run_ragas(
     try:
         from datasets import Dataset
         from ragas import evaluate
-        from ragas.embeddings.base import LangchainEmbeddingsWrapper
-        from ragas.llms.base import LangchainLLMWrapper
-        from ragas.metrics import context_precision, faithfulness, response_relevancy
-        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     except ImportError as exc:
         raise RuntimeError(
             "Ragas or datasets is not installed. Run `pip install -r eval/requirements.txt` first."
         ) from exc
+    from ragas.embeddings.base import LangchainEmbeddingsWrapper
+    from ragas.llms.base import LangchainLLMWrapper
+    from ragas.metrics import context_precision, faithfulness
+    from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
+    try:
+        from ragas.metrics import answer_relevancy
+    except ImportError:
+        from ragas.metrics import _answer_relevancy as answer_relevancy
+
+    metrics = [context_precision, faithfulness, answer_relevancy]
     llm = LangchainLLMWrapper(ChatOpenAI(model=llm_model, temperature=0))
     embeddings = LangchainEmbeddingsWrapper(OpenAIEmbeddings(model=embedding_model))
     dataset = Dataset.from_pandas(ragas_df[["question", "answer", "contexts", "reference"]])
     result = evaluate(
         dataset=dataset,
-        metrics=[context_precision, faithfulness, response_relevancy],
+        metrics=metrics,
         llm=llm,
         embeddings=embeddings,
     )

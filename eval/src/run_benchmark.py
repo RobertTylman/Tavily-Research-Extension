@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import ssl
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search"
 PARALLEL_RUNS_URL = "https://api.parallel.ai/v1/tasks/runs"
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+OPENAI_JUDGE_MODEL = "gpt-5.5"
 
 STRUCTURED_VERDICT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -106,14 +108,27 @@ PARALLEL_STRUCTURED_VERDICT_SCHEMA: dict[str, Any] = {
     },
 }
 
+TAVILY_OUTPUT_SCHEMA: dict[str, Any] = {
+    "required": STRUCTURED_VERDICT_SCHEMA["required"],
+    "properties": STRUCTURED_VERDICT_SCHEMA["properties"],
+}
+
 DEFAULT_PROVIDER_MODES = [
     "tavily:tavily_research",
     "exa:exa_search_structured",
-    "exa:exa_research_async",
+    "exa:exa_deep_research",
     "brave:brave_context_plus_judge",
     "firecrawl:firecrawl_search_plus_judge",
     "parallel:parallel_task_run",
 ]
+
+SUPPORTED_PROVIDER_MODES = {
+    "tavily": {"tavily_research"},
+    "exa": {"exa_search_structured", "exa_deep_research", "exa_research_async"},
+    "brave": {"brave_context_plus_judge", "brave_answers_native"},
+    "firecrawl": {"firecrawl_search_plus_judge"},
+    "parallel": {"parallel_task_run"},
+}
 
 DEFAULT_HTTP_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -121,29 +136,19 @@ DEFAULT_HTTP_USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36 FactCheckerEval/1.0"
 )
 
-TAVILY_MINI_RESEARCH_MIN_CREDITS = 4
-TAVILY_MINI_RESEARCH_MAX_CREDITS = 110
-TAVILY_PAYG_USD_PER_CREDIT = 0.008
-
-EXA_SEARCH_WITH_CONTENTS_USD_PER_REQUEST = 7 / 1000
-EXA_SUMMARIZATION_USD_PER_REQUEST = 1 / 1000
-EXA_DEEP_SEARCH_USD_PER_REQUEST = 12 / 1000
-
-BRAVE_SEARCH_USD_PER_REQUEST = 5 / 1000
-BRAVE_ANSWERS_USD_PER_QUERY = 4 / 1000
+TAVILY_USD_PER_CREDIT = 0.008
+FIRECRAWL_STANDARD_USD_PER_CREDIT = 83 / 100_000
+EXA_DEEP_USD_PER_REQUEST_LOW = 12 / 1_000
+EXA_DEEP_USD_PER_REQUEST_HIGH = 15 / 1_000
+PARALLEL_USD_PER_REQUEST_LOW = 0.005
+PARALLEL_USD_PER_REQUEST_HIGH = 2.4
+BRAVE_SEARCH_USD_PER_REQUEST = 5 / 1_000
+BRAVE_ANSWERS_USD_PER_REQUEST = 4 / 1_000
 BRAVE_ANSWERS_USD_PER_MILLION_INPUT_TOKENS = 5
 BRAVE_ANSWERS_USD_PER_MILLION_OUTPUT_TOKENS = 5
-
-FIRECRAWL_HOBBY_EXTRA_USD_PER_CREDIT = 9 / 1000
-FIRECRAWL_GROWTH_EXTRA_USD_PER_CREDIT = 177 / 175000
-
-PARALLEL_BASE_TASK_USD_PER_REQUEST = 10 / 1000
-
-OPENAI_GPT_4O_MINI_USD_PER_MILLION_INPUT_TOKENS = 0.15
-OPENAI_GPT_4O_MINI_USD_PER_MILLION_OUTPUT_TOKENS = 0.60
-
-ANTHROPIC_HAIKU_USD_PER_MILLION_INPUT_TOKENS = 0.80
-ANTHROPIC_HAIKU_USD_PER_MILLION_OUTPUT_TOKENS = 4.0
+OPENAI_GPT_5_5_USD_PER_MILLION_INPUT_TOKENS = 5
+OPENAI_GPT_5_5_USD_PER_MILLION_CACHED_INPUT_TOKENS = 0.5
+OPENAI_GPT_5_5_USD_PER_MILLION_OUTPUT_TOKENS = 30
 
 
 @dataclass
@@ -171,13 +176,34 @@ class BenchmarkError(RuntimeError):
         self.response_body = response_body
 
 
+class VisibleTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._skip_depth = 0
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() in {"script", "style", "nav", "footer", "header", "noscript", "svg"}:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in {"script", "style", "nav", "footer", "header", "noscript", "svg"} and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            text = clean_text(data, max_chars=1000)
+            if text:
+                self.parts.append(text)
+
+    def text(self, max_chars: int = 6000) -> str:
+        return clean_text(" ".join(self.parts), max_chars=max_chars)
+
+
 @dataclass
 class JudgeResult:
     structured: dict[str, Any]
-    cost_estimate: float | None
-    cost_estimate_low: float | None
-    cost_estimate_high: float | None
-    cost_estimate_method: str | None
+    cost_payload: dict[str, Any]
 
 
 def load_dotenv_like(path: Path) -> dict[str, str]:
@@ -259,6 +285,142 @@ def append_citations(report: str, citations: list[dict[str, Any]]) -> str:
     return f"{report}\n\n**Sources:**\n" + "\n".join(lines)
 
 
+def clean_text(value: Any, max_chars: int = 6000) -> str:
+    if not isinstance(value, str):
+        return ""
+    words = [
+        word
+        for word in value.replace("\x00", " ").split()
+        if not word.startswith(("http://", "https://"))
+    ]
+    cleaned = " ".join(words)
+    if not cleaned:
+        return ""
+    return cleaned[:max_chars]
+
+
+def first_text(*values: Any, max_chars: int = 6000) -> str:
+    for value in values:
+        text = clean_text(value, max_chars=max_chars)
+        if text:
+            return text
+    return ""
+
+
+def extract_nested_text(
+    value: Any,
+    preferred_keys: tuple[str, ...] = (
+        "markdown",
+        "raw_content",
+        "rawContent",
+        "content",
+        "text",
+        "snippet",
+        "description",
+        "summary",
+        "highlight",
+        "highlights",
+        "extract",
+        "body",
+    ),
+    max_chars: int = 6000,
+) -> str:
+    chunks: list[str] = []
+
+    def visit(item: Any, only_preferred: bool = True) -> None:
+        if len("\n\n".join(chunks)) >= max_chars:
+            return
+        if isinstance(item, str):
+            text = clean_text(item, max_chars=max_chars)
+            if text and text not in chunks:
+                chunks.append(text)
+            return
+        if isinstance(item, list):
+            for child in item:
+                visit(child, only_preferred=only_preferred)
+            return
+        if isinstance(item, dict):
+            keys = preferred_keys if only_preferred else tuple(item.keys())
+            for key in keys:
+                if key in item:
+                    visit(item[key], only_preferred=only_preferred)
+
+    visit(value, only_preferred=True)
+    if not chunks:
+        visit(value, only_preferred=False)
+    return "\n\n".join(chunks)[:max_chars]
+
+
+def fetch_url_context(url: str, timeout: int = 12, max_chars: int = 6000) -> str:
+    if not url.startswith(("http://", "https://")):
+        return ""
+    lowered = urllib.parse.urlparse(url).path.lower()
+    if lowered.endswith((".pdf", ".png", ".jpg", ".jpeg", ".gif", ".zip")):
+        return ""
+    request = urllib.request.Request(
+        url=url,
+        headers={
+            "User-Agent": DEFAULT_HTTP_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout, context=build_ssl_context()) as response:
+            content_type = response.headers.get("Content-Type", "")
+            if "text" not in content_type and "html" not in content_type:
+                return ""
+            body = response.read(750_000).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    if "html" in content_type:
+        parser = VisibleTextParser()
+        try:
+            parser.feed(body)
+            return parser.text(max_chars=max_chars)
+        except Exception:
+            return clean_text(body, max_chars=max_chars)
+    return clean_text(body, max_chars=max_chars)
+
+
+def enrich_citations_with_url_context(
+    citations: list[dict[str, Any]],
+    max_fetches: int = 5,
+    min_chars: int = 240,
+) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    fetches = 0
+    for citation in citations:
+        item = dict(citation)
+        context = first_text(item.get("context"), item.get("snippet"))
+        if len(context) < min_chars or context == item.get("title") or context == item.get("url"):
+            if fetches < max_fetches:
+                fetched = fetch_url_context(str(item.get("url") or ""))
+                fetches += 1
+                if fetched:
+                    item["context"] = fetched
+                    item["snippet"] = fetched[:800]
+        enriched.append(item)
+    return enriched
+
+
+def evidence_contexts(citations: list[dict[str, Any]], min_chars: int = 40) -> list[str]:
+    contexts: list[str] = []
+    seen: set[str] = set()
+    for citation in citations:
+        if not isinstance(citation, dict):
+            continue
+        text = first_text(citation.get("context"), citation.get("snippet"), citation.get("title"))
+        if text and text == citation.get("title"):
+            continue
+        if len(text) < min_chars or text == citation.get("url"):
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        contexts.append(text)
+    return contexts
+
+
 def build_research_prompt(claim: str) -> str:
     return "\n".join(
         [
@@ -279,31 +441,28 @@ def round_cost(value: float | None) -> float | None:
     return round(float(value), 6)
 
 
-def midpoint_cost(low: float | None, high: float | None) -> float | None:
-    if low is None and high is None:
-        return None
-    if low is None:
-        return round_cost(high)
-    if high is None:
-        return round_cost(low)
-    return round_cost((low + high) / 2)
-
-
 def build_cost_payload(
-    estimate: float | None,
-    low: float | None = None,
-    high: float | None = None,
+    unit_price: float | None,
+    units: float = 1,
+    unit_name: str = "request",
+    low_unit_price: float | None = None,
+    high_unit_price: float | None = None,
     method: str | None = None,
 ) -> dict[str, Any]:
-    normalized_low = round_cost(low if low is not None else estimate)
-    normalized_high = round_cost(high if high is not None else estimate)
-    normalized_estimate = round_cost(
-        estimate if estimate is not None else midpoint_cost(normalized_low, normalized_high)
-    )
+    low_price = low_unit_price if low_unit_price is not None else unit_price
+    high_price = high_unit_price if high_unit_price is not None else unit_price
+    unit_price_midpoint = unit_price
+    if unit_price_midpoint is None and low_price is not None and high_price is not None:
+        unit_price_midpoint = (low_price + high_price) / 2
     return {
-        "cost_estimate": normalized_estimate,
-        "cost_estimate_low": normalized_low,
-        "cost_estimate_high": normalized_high,
+        "cost_units": units,
+        "cost_unit_name": unit_name,
+        "cost_unit_price": round_cost(unit_price_midpoint),
+        "cost_unit_price_low": round_cost(low_price),
+        "cost_unit_price_high": round_cost(high_price),
+        "cost_estimate": round_cost(unit_price_midpoint * units) if unit_price_midpoint is not None else None,
+        "cost_estimate_low": round_cost(low_price * units) if low_price is not None else None,
+        "cost_estimate_high": round_cost(high_price * units) if high_price is not None else None,
         "cost_estimate_method": method,
     }
 
@@ -317,87 +476,99 @@ def compute_token_cost(
     return ((float(input_tokens) * input_rate_per_million) + (float(output_tokens) * output_rate_per_million)) / 1_000_000
 
 
-def compute_openai_judge_cost(usage: dict[str, Any]) -> float | None:
-    prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
-    completion_tokens = usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
-    if not prompt_tokens and not completion_tokens:
-        return None
-    return compute_token_cost(
-        prompt_tokens,
-        completion_tokens,
-        OPENAI_GPT_4O_MINI_USD_PER_MILLION_INPUT_TOKENS,
-        OPENAI_GPT_4O_MINI_USD_PER_MILLION_OUTPUT_TOKENS,
-    )
-
-
-def compute_anthropic_judge_cost(usage: dict[str, Any]) -> float | None:
-    input_tokens = (
-        (usage.get("input_tokens", 0) or 0)
-        + (usage.get("cache_creation_input_tokens", 0) or 0)
-        + (usage.get("cache_read_input_tokens", 0) or 0)
-    )
-    output_tokens = usage.get("output_tokens", 0) or 0
-    if not input_tokens and not output_tokens:
-        return None
-    return compute_token_cost(
-        input_tokens,
-        output_tokens,
-        ANTHROPIC_HAIKU_USD_PER_MILLION_INPUT_TOKENS,
-        ANTHROPIC_HAIKU_USD_PER_MILLION_OUTPUT_TOKENS,
-    )
-
-
-def estimate_tavily_research_cost() -> dict[str, Any]:
-    low = TAVILY_MINI_RESEARCH_MIN_CREDITS * TAVILY_PAYG_USD_PER_CREDIT
-    high = TAVILY_MINI_RESEARCH_MAX_CREDITS * TAVILY_PAYG_USD_PER_CREDIT
+def tavily_cost_payload(credits: float | None) -> dict[str, Any]:
+    if credits is None:
+        return {
+            "cost_units": None,
+            "cost_unit_name": "credit",
+            "cost_unit_price": round_cost(TAVILY_USD_PER_CREDIT),
+            "cost_unit_price_low": round_cost(TAVILY_USD_PER_CREDIT),
+            "cost_unit_price_high": round_cost(TAVILY_USD_PER_CREDIT),
+            "cost_estimate": None,
+            "cost_estimate_low": None,
+            "cost_estimate_high": None,
+            "cost_estimate_method": "Tavily pay-as-you-go pricing is $0.008 per credit; exact request credits were not returned.",
+        }
     return build_cost_payload(
-        midpoint_cost(low, high),
-        low=low,
-        high=high,
-        method="Tavily Research mini uses published pay-as-you-go boundaries of 4-110 credits/request at $0.008 per credit.",
+        TAVILY_USD_PER_CREDIT,
+        units=credits,
+        unit_name="credit",
+        method=f"Tavily pay-as-you-go pricing is $0.008 per credit; recorded {credits:g} credit(s).",
     )
 
 
-def estimate_exa_search_structured_cost() -> dict[str, Any]:
-    estimate = EXA_SEARCH_WITH_CONTENTS_USD_PER_REQUEST + EXA_SUMMARIZATION_USD_PER_REQUEST
+def exa_deep_cost_payload() -> dict[str, Any]:
     return build_cost_payload(
-        estimate,
-        method="Exa Search with contents is priced at $7/1k requests; structured summarization is estimated at $1/1k outputs.",
+        None,
+        units=1,
+        unit_name="request",
+        low_unit_price=EXA_DEEP_USD_PER_REQUEST_LOW,
+        high_unit_price=EXA_DEEP_USD_PER_REQUEST_HIGH,
+        method="Exa Deep Search pricing is $12-$15 per 1k requests.",
     )
 
 
-def estimate_exa_research_cost() -> dict[str, Any]:
-    return build_cost_payload(
-        EXA_DEEP_SEARCH_USD_PER_REQUEST,
-        method="Exa Deep Search is priced at $12/1k requests.",
-    )
-
-
-def estimate_brave_search_cost() -> dict[str, Any]:
+def brave_search_cost_payload() -> dict[str, Any]:
     return build_cost_payload(
         BRAVE_SEARCH_USD_PER_REQUEST,
-        method="Brave Search API AI Search/LLM Context pricing is $5/1k requests.",
+        units=1,
+        unit_name="request",
+        method="Brave Search pricing is $5 per 1k requests.",
     )
 
 
-def estimate_firecrawl_search_cost(limit: int) -> dict[str, Any]:
-    search_credits = 2 * math.ceil(limit / 10)
-    scrape_credits = limit
-    total_credits = search_credits + scrape_credits
-    low = total_credits * FIRECRAWL_GROWTH_EXTRA_USD_PER_CREDIT
-    high = total_credits * FIRECRAWL_HOBBY_EXTRA_USD_PER_CREDIT
+def brave_answers_cost_payload(input_tokens: float = 0, output_tokens: float = 0) -> dict[str, Any]:
+    request_cost = BRAVE_ANSWERS_USD_PER_REQUEST
+    token_cost = compute_token_cost(
+        input_tokens,
+        output_tokens,
+        BRAVE_ANSWERS_USD_PER_MILLION_INPUT_TOKENS,
+        BRAVE_ANSWERS_USD_PER_MILLION_OUTPUT_TOKENS,
+    )
     return build_cost_payload(
-        midpoint_cost(low, high),
-        low=low,
-        high=high,
-        method=f"Firecrawl /search with markdown scraping at limit={limit} costs {total_credits} credits total; USD range uses published paid-plan auto-recharge pack rates.",
+        request_cost + token_cost,
+        units=1,
+        unit_name="request",
+        method="Brave Answers pricing is $4 per 1k requests plus $5 per million input/output tokens.",
     )
 
 
-def estimate_parallel_base_task_cost() -> dict[str, Any]:
+def firecrawl_cost_payload(credits: float) -> dict[str, Any]:
     return build_cost_payload(
-        PARALLEL_BASE_TASK_USD_PER_REQUEST,
-        method="Parallel Task API processor=base is priced at $10/1k task runs.",
+        FIRECRAWL_STANDARD_USD_PER_CREDIT,
+        units=credits,
+        unit_name="credit",
+        method="Firecrawl Standard plan pricing is $83/month for 100,000 credits.",
+    )
+
+
+def parallel_cost_payload() -> dict[str, Any]:
+    return build_cost_payload(
+        None,
+        units=1,
+        unit_name="request",
+        low_unit_price=PARALLEL_USD_PER_REQUEST_LOW,
+        high_unit_price=PARALLEL_USD_PER_REQUEST_HIGH,
+        method="Parallel pricing is $0.005-$2.40 per request.",
+    )
+
+
+def openai_judge_cost_payload(usage: dict[str, Any]) -> dict[str, Any]:
+    prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
+    prompt_token_details = usage.get("prompt_tokens_details") or {}
+    cached_tokens = usage.get("cached_tokens", prompt_token_details.get("cached_tokens", 0)) or 0
+    completion_tokens = usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
+    uncached_input_tokens = max(float(prompt_tokens) - float(cached_tokens), 0)
+    cost = (
+        uncached_input_tokens * OPENAI_GPT_5_5_USD_PER_MILLION_INPUT_TOKENS
+        + float(cached_tokens) * OPENAI_GPT_5_5_USD_PER_MILLION_CACHED_INPUT_TOKENS
+        + float(completion_tokens) * OPENAI_GPT_5_5_USD_PER_MILLION_OUTPUT_TOKENS
+    ) / 1_000_000
+    return build_cost_payload(
+        cost if cost else None,
+        units=1,
+        unit_name="judge_call",
+        method="OpenAI judge token cost uses GPT-5.5 pricing: $5/M input, $0.50/M cached input, $30/M output.",
     )
 
 
@@ -424,13 +595,18 @@ def merge_cost_payloads(*payloads: dict[str, Any]) -> dict[str, Any]:
         if method:
             methods.append(str(method))
     if not seen_value and not methods:
-        return build_cost_payload(None)
-    return build_cost_payload(
-        estimate if seen_value else None,
-        low=low if low else (estimate if seen_value else None),
-        high=high if high else (estimate if seen_value else None),
-        method=" + ".join(methods) if methods else None,
-    )
+        return build_cost_payload(None, unit_name="mixed")
+    return {
+        "cost_units": 1,
+        "cost_unit_name": "mixed",
+        "cost_unit_price": round_cost(estimate) if seen_value else None,
+        "cost_unit_price_low": round_cost(low) if low else None,
+        "cost_unit_price_high": round_cost(high) if high else None,
+        "cost_estimate": round_cost(estimate) if seen_value else None,
+        "cost_estimate_low": round_cost(low) if low else None,
+        "cost_estimate_high": round_cost(high) if high else None,
+        "cost_estimate_method": " + ".join(methods) if methods else None,
+    }
 
 
 def build_judge_prompt(claim: str, citations: list[dict[str, Any]]) -> str:
@@ -527,6 +703,25 @@ def request_json(
             body=body,
             json_data=parse_json_maybe(body),
         )
+    except urllib.error.URLError as exc:
+        raise BenchmarkError("network", 0, f"Network request failed: {exc.reason}") from exc
+
+
+def clean_api_key(value: str | None) -> str:
+    if not value:
+        return ""
+    cleaned = value.strip().strip('"').strip("'")
+    if " #" in cleaned:
+        cleaned = cleaned.split(" #", 1)[0].strip()
+    return cleaned
+
+
+def mask_key(value: str) -> str:
+    if not value:
+        return "missing"
+    if len(value) <= 8:
+        return "***"
+    return f"{value[:4]}...{value[-4:]}"
 
 
 def load_dataset(path: Path) -> list[BenchmarkClaim]:
@@ -572,20 +767,39 @@ def detect_api_keys() -> dict[str, str]:
         "openai": os.environ.get("OPENAI_API_KEY", "") or dotenv_values.get("OPENAI_API_KEY", "") or dotenv_values.get("openai", ""),
         "anthropic": os.environ.get("ANTHROPIC_API_KEY", "") or dotenv_values.get("ANTHROPIC_API_KEY", "") or dotenv_values.get("anthropic", ""),
     }
-    return mapping
+    return {provider: clean_api_key(value) for provider, value in mapping.items()}
+
+
+def provider_mode_needs_judge(mode: str) -> bool:
+    return mode in {"brave_context_plus_judge", "firecrawl_search_plus_judge"}
 
 
 def provider_mode_specs(requested: list[str], keys: dict[str, str], judge_provider: str) -> list[tuple[str, str]]:
     specs: list[tuple[str, str]] = []
     for item in requested:
+        if ":" not in item:
+            raise ValueError(f"Provider mode must be provider:mode, got {item!r}")
         provider, mode = item.split(":", 1)
-        requires_judge = mode in {"brave_context_plus_judge", "firecrawl_search_plus_judge"}
+        if mode not in SUPPORTED_PROVIDER_MODES.get(provider, set()):
+            raise ValueError(f"Unsupported provider mode: {provider}:{mode}")
+        requires_judge = provider_mode_needs_judge(mode)
         if not keys.get(provider):
             continue
         if requires_judge and not keys.get(judge_provider):
             continue
         specs.append((provider, mode))
     return specs
+
+
+def skipped_provider_modes(requested: list[str], keys: dict[str, str], judge_provider: str) -> list[str]:
+    skipped: list[str] = []
+    for item in requested:
+        provider, mode = item.split(":", 1)
+        if not keys.get(provider):
+            skipped.append(f"{item} (missing {provider.upper()}_API_KEY)")
+        elif provider_mode_needs_judge(mode) and not keys.get(judge_provider):
+            skipped.append(f"{item} (missing {judge_provider.upper()}_API_KEY judge)")
+    return skipped
 
 
 def judge_with_evidence(
@@ -604,7 +818,7 @@ def judge_with_evidence(
                 "Authorization": f"Bearer {judge_key}",
             },
             payload={
-                "model": "gpt-4o-mini",
+                "model": OPENAI_JUDGE_MODEL,
                 "response_format": {"type": "json_object"},
                 "messages": [
                     {
@@ -624,11 +838,7 @@ def judge_with_evidence(
             .get("message", {})
             .get("content", "")
         )
-        judge_cost = compute_openai_judge_cost(usage)
-        cost_payload = build_cost_payload(
-            judge_cost,
-            method="OpenAI gpt-4o-mini judge cost computed from returned token usage at $0.15/M input and $0.60/M output.",
-        )
+        cost_payload = openai_judge_cost_payload(usage)
     else:
         result = request_json(
             "POST",
@@ -648,23 +858,19 @@ def judge_with_evidence(
         )
         if result.status >= 400:
             raise BenchmarkError("judge", result.status, "Anthropic judge failed", result.body)
-        usage = (result.json_data or {}).get("usage") or {}
         blocks = (result.json_data or {}).get("content") or []
         content = next((block.get("text", "") for block in blocks if block.get("type") == "text"), "")
-        judge_cost = compute_anthropic_judge_cost(usage)
         cost_payload = build_cost_payload(
-            judge_cost,
-            method="Anthropic Claude judge cost computed from returned token usage using current Claude Haiku pricing table.",
+            None,
+            unit_name="judge_call",
+            method="Anthropic judge cost not configured; no Anthropic pricing was provided for this benchmark.",
         )
     parsed = parse_json_maybe(content)
     if not isinstance(parsed, dict):
         raise BenchmarkError("judge", 502, "Judge returned unparsable JSON", content)
     return JudgeResult(
         structured=parsed,
-        cost_estimate=cost_payload["cost_estimate"],
-        cost_estimate_low=cost_payload["cost_estimate_low"],
-        cost_estimate_high=cost_payload["cost_estimate_high"],
-        cost_estimate_method=cost_payload["cost_estimate_method"],
+        cost_payload=cost_payload,
     )
 
 
@@ -678,7 +884,7 @@ def run_tavily_research(claim: BenchmarkClaim, api_key: str) -> dict[str, Any]:
             "input": build_research_prompt(claim.claim),
             "model": "mini",
             "citation_format": "numbered",
-            "output_schema": STRUCTURED_VERDICT_SCHEMA,
+            "output_schema": TAVILY_OUTPUT_SCHEMA,
             "stream": False,
         },
         timeout=120,
@@ -713,6 +919,11 @@ def run_tavily_research(claim: BenchmarkClaim, api_key: str) -> dict[str, Any]:
     if result_payload is None:
         raise BenchmarkError("tavily", 408, "Tavily research timed out")
 
+    create_payload = create.json_data if isinstance(create.json_data, dict) else {}
+    usage = result_payload.get("usage") or create_payload.get("usage") or {}
+    credits = None
+    if isinstance(usage, dict) and isinstance(usage.get("credits"), (int, float)):
+        credits = float(usage["credits"])
     structured = result_payload.get("content")
     if not isinstance(structured, dict):
         structured = parse_json_maybe(result_payload.get("content", "") or "") or {}
@@ -721,13 +932,16 @@ def run_tavily_research(claim: BenchmarkClaim, api_key: str) -> dict[str, Any]:
             "tavily",
             source.get("url", ""),
             title=source.get("title"),
-            snippet=source.get("snippet"),
+            snippet=first_text(source.get("snippet"), source.get("description"), source.get("title"), source.get("url")),
+            context=extract_nested_text(source)
+            or first_text(source.get("snippet"), source.get("description"), source.get("title"), source.get("url")),
             published_date=source.get("published_date"),
             favicon=source.get("favicon"),
         )
         for source in (result_payload.get("sources") or [])
         if isinstance(source, dict) and source.get("url")
     ]
+    citations = enrich_citations_with_url_context(citations, max_fetches=5)
     latency_ms = int((time.time() - started) * 1000)
     report = append_citations(
         (structured.get("report") or structured.get("summary") or structured.get("explanation") or "").strip()
@@ -738,7 +952,7 @@ def run_tavily_research(claim: BenchmarkClaim, api_key: str) -> dict[str, Any]:
         "provider": "tavily",
         "provider_mode": "tavily_research",
         "research_endpoint": "POST/GET https://api.tavily.com/research",
-        "retrieved_contexts": [c.get("context", c.get("snippet", "")) for c in citations],
+        "retrieved_contexts": evidence_contexts(citations),
         "response": {
             "verdict": sanitize_verdict(structured.get("verdict")),
             "summary": structured.get("summary"),
@@ -748,7 +962,7 @@ def run_tavily_research(claim: BenchmarkClaim, api_key: str) -> dict[str, Any]:
         },
         "citations": citations,
         "latency_ms": latency_ms,
-        **estimate_tavily_research_cost(),
+        **tavily_cost_payload(credits),
         "status": "success",
     }
 
@@ -816,7 +1030,7 @@ def run_exa_search_structured(claim: BenchmarkClaim, api_key: str) -> dict[str, 
         "provider": "exa",
         "provider_mode": "exa_search_structured",
         "research_endpoint": "POST https://api.exa.ai/search",
-        "retrieved_contexts": [c.get("context", c.get("snippet", "")) for c in citations],
+        "retrieved_contexts": evidence_contexts(citations),
         "response": {
             "verdict": sanitize_verdict(structured.get("verdict")),
             "summary": structured.get("summary"),
@@ -826,7 +1040,91 @@ def run_exa_search_structured(claim: BenchmarkClaim, api_key: str) -> dict[str, 
         },
         "citations": citations,
         "latency_ms": latency_ms,
-        **estimate_exa_search_structured_cost(),
+        **exa_deep_cost_payload(),
+        "status": "success",
+    }
+
+
+def run_exa_deep_research(claim: BenchmarkClaim, api_key: str) -> dict[str, Any]:
+    started = time.time()
+    result = request_json(
+        "POST",
+        EXA_SEARCH_URL,
+        {"Content-Type": "application/json", "x-api-key": api_key},
+        payload={
+            "query": build_research_prompt(claim.claim),
+            "type": "deep-reasoning",
+            "numResults": 10,
+            "systemPrompt": "Prefer official, primary, and recently updated sources. Return a careful fact-check verdict.",
+            "contents": {"highlights": {"maxCharacters": 4000}},
+            "outputSchema": STRUCTURED_VERDICT_SCHEMA,
+        },
+        timeout=180,
+    )
+    if result.status >= 400:
+        raise BenchmarkError("exa", result.status, "Exa deep-reasoning search failed", result.body)
+    payload = result.json_data or {}
+    results = payload.get("results") or []
+    output = payload.get("output") or {}
+    structured = output.get("content") or {}
+    grounding = output.get("grounding") or []
+    if not isinstance(structured, dict):
+        structured = parse_json_maybe(str(structured)) or {}
+
+    seen: set[str] = set()
+    citations: list[dict[str, Any]] = []
+    result_map = {item.get("url"): item for item in results if isinstance(item, dict)}
+    for entry in grounding:
+        for source in (entry.get("citations") or []):
+            url = source.get("url")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            result_item = result_map.get(url, {})
+            highlights = result_item.get("highlights") or []
+            citations.append(
+                create_citation(
+                    "exa",
+                    url,
+                    title=source.get("title") or result_item.get("title"),
+                    snippet=(highlights or [None])[0] or result_item.get("text") or result_item.get("title") or url,
+                    published_date=result_item.get("publishedDate"),
+                    context="\n".join(highlights) or result_item.get("text") or result_item.get("title") or url,
+                    rank=len(citations) + 1,
+                )
+            )
+    for item in results:
+        url = item.get("url")
+        if not url or url in seen:
+            continue
+        highlights = item.get("highlights") or []
+        citations.append(
+            create_citation(
+                "exa",
+                url,
+                title=item.get("title"),
+                snippet=(highlights or [None])[0] or item.get("text") or item.get("title") or url,
+                published_date=item.get("publishedDate"),
+                context="\n".join(highlights) or item.get("text") or item.get("title") or url,
+                rank=len(citations) + 1,
+            )
+        )
+    latency_ms = int((time.time() - started) * 1000)
+    return {
+        "provider": "exa",
+        "provider_mode": "exa_deep_research",
+        "research_endpoint": "POST https://api.exa.ai/search type=deep-reasoning",
+        "retrieved_contexts": evidence_contexts(citations),
+        "response": {
+            "verdict": sanitize_verdict(structured.get("verdict")),
+            "summary": structured.get("summary"),
+            "explanation": structured.get("explanation") or structured.get("summary") or "No explanation returned.",
+            "confidence": sanitize_confidence(structured.get("confidence")),
+            "report": append_citations((structured.get("report") or structured.get("summary") or "").strip() or "No report returned.", citations),
+        },
+        "citations": citations,
+        "latency_ms": latency_ms,
+        **exa_deep_cost_payload(),
         "status": "success",
     }
 
@@ -892,7 +1190,7 @@ def run_exa_research_async(claim: BenchmarkClaim, api_key: str) -> dict[str, Any
         "provider": "exa",
         "provider_mode": "exa_research_async",
         "research_endpoint": "POST/GET https://api.exa.ai/research/v1",
-        "retrieved_contexts": [c.get("context", c.get("snippet", "")) for c in citations],
+        "retrieved_contexts": evidence_contexts(citations),
         "response": {
             "verdict": sanitize_verdict(structured.get("verdict")),
             "summary": structured.get("summary"),
@@ -902,7 +1200,7 @@ def run_exa_research_async(claim: BenchmarkClaim, api_key: str) -> dict[str, Any
         },
         "citations": citations,
         "latency_ms": latency_ms,
-        **estimate_exa_research_cost(),
+        **exa_deep_cost_payload(),
         "status": "success",
     }
 
@@ -940,56 +1238,60 @@ def run_brave_context_plus_judge(
     for value in (payload.get("grounding") or {}).values():
         grounding_values.extend(value if isinstance(value, list) else [value])
     for record in grounding_values:
+        if isinstance(record, str):
+            record = {"text": record}
         if not isinstance(record, dict):
             continue
-        url = record.get("url") or record.get("source_url")
+        url = record.get("url") or record.get("source_url") or record.get("sourceUrl")
         if not url or url in seen:
             continue
         seen.add(url)
         meta = sources.get(url) or {}
+        context = (
+            extract_nested_text(record)
+            or extract_nested_text(meta)
+            or first_text(meta.get("snippet"), meta.get("description"), meta.get("title"), url)
+        )
         citations.append(
             create_citation(
                 "brave",
                 url,
                 title=meta.get("title"),
-                snippet=record.get("snippet") or record.get("text") or record.get("content") or meta.get("snippet") or meta.get("description") or url,
+                snippet=first_text(record.get("snippet"), record.get("text"), record.get("content"), meta.get("snippet"), meta.get("description"), meta.get("title"), url),
                 source=meta.get("site_name"),
                 favicon=meta.get("favicon"),
-                context=record.get("text") or record.get("content") or meta.get("snippet") or meta.get("description") or url,
+                context=context,
                 rank=len(citations) + 1,
             )
         )
     for url, meta in sources.items():
         if url in seen:
             continue
+        context = extract_nested_text(meta) or first_text(meta.get("snippet"), meta.get("description"), meta.get("title"), url)
         citations.append(
             create_citation(
                 "brave",
                 url,
                 title=meta.get("title"),
-                snippet=meta.get("snippet") or meta.get("description") or meta.get("title") or url,
+                snippet=first_text(meta.get("snippet"), meta.get("description"), meta.get("title"), url),
                 source=meta.get("site_name"),
                 favicon=meta.get("favicon"),
-                context=meta.get("snippet") or meta.get("description") or meta.get("title") or url,
+                context=context,
                 rank=len(citations) + 1,
             )
         )
+    citations = enrich_citations_with_url_context(citations, max_fetches=5)
     judged = judge_with_evidence(claim.claim, citations, judge_provider, judge_key)
     latency_ms = int((time.time() - started) * 1000)
     total_cost = merge_cost_payloads(
-        estimate_brave_search_cost(),
-        {
-            "cost_estimate": judged.cost_estimate,
-            "cost_estimate_low": judged.cost_estimate_low,
-            "cost_estimate_high": judged.cost_estimate_high,
-            "cost_estimate_method": judged.cost_estimate_method,
-        },
+        brave_search_cost_payload(),
+        judged.cost_payload,
     )
     return {
         "provider": "brave",
         "provider_mode": "brave_context_plus_judge",
         "research_endpoint": "POST https://api.search.brave.com/res/v1/llm/context",
-        "retrieved_contexts": [c.get("context", c.get("snippet", "")) for c in citations],
+        "retrieved_contexts": evidence_contexts(citations),
         "response": {
             "verdict": sanitize_verdict(judged.structured.get("verdict")),
             "summary": judged.structured.get("summary"),
@@ -1072,33 +1374,14 @@ def run_brave_answers_native(claim: BenchmarkClaim, api_key: str) -> dict[str, A
         clean_content = clean_content[:start] + clean_content[end + len("</citation>") :]
     clean_content = clean_content.strip()
     latency_ms = int((time.time() - started) * 1000)
-    exact_cost = usage.get("X-Request-Total-Cost")
-    if isinstance(exact_cost, str):
-        try:
-            exact_cost = float(exact_cost)
-        except ValueError:
-            exact_cost = None
-    if not isinstance(exact_cost, (int, float)):
-        exact_cost = None
     input_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0
     output_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
-    token_cost = None
-    if input_tokens or output_tokens:
-        token_cost = compute_token_cost(
-            input_tokens,
-            output_tokens,
-            BRAVE_ANSWERS_USD_PER_MILLION_INPUT_TOKENS,
-            BRAVE_ANSWERS_USD_PER_MILLION_OUTPUT_TOKENS,
-        )
-    brave_answers_cost = build_cost_payload(
-        exact_cost if exact_cost is not None else BRAVE_ANSWERS_USD_PER_QUERY + (token_cost or 0.0),
-        method="Brave Answers pricing uses $4/1k queries plus published token pricing when exact request cost is unavailable.",
-    )
+    brave_answers_cost = brave_answers_cost_payload(input_tokens, output_tokens)
     return {
         "provider": "brave",
         "provider_mode": "brave_answers_native",
         "research_endpoint": "POST https://api.search.brave.com/res/v1/chat/completions",
-        "retrieved_contexts": [c.get("context", c.get("snippet", "")) for c in citations],
+        "retrieved_contexts": evidence_contexts(citations),
         "response": {
             "verdict": "INSUFFICIENT_EVIDENCE",
             "summary": clean_content.splitlines()[0] if clean_content else None,
@@ -1139,29 +1422,25 @@ def run_firecrawl_search_plus_judge(
             "firecrawl",
             item.get("url"),
             title=item.get("title") or (item.get("metadata") or {}).get("title"),
-            snippet=item.get("description") or item.get("markdown") or item.get("title") or item.get("url"),
-            context=item.get("markdown") or item.get("description") or item.get("title") or item.get("url"),
+            snippet=first_text(item.get("description"), item.get("markdown"), item.get("title"), item.get("url")),
+            context=extract_nested_text(item) or first_text(item.get("description"), item.get("title"), item.get("url")),
             rank=index + 1,
         )
         for index, item in enumerate(data)
         if isinstance(item, dict) and item.get("url")
     ]
+    citations = enrich_citations_with_url_context(citations, max_fetches=5)
     judged = judge_with_evidence(claim.claim, citations, judge_provider, judge_key)
     latency_ms = int((time.time() - started) * 1000)
     total_cost = merge_cost_payloads(
-        estimate_firecrawl_search_cost(limit=5),
-        {
-            "cost_estimate": judged.cost_estimate,
-            "cost_estimate_low": judged.cost_estimate_low,
-            "cost_estimate_high": judged.cost_estimate_high,
-            "cost_estimate_method": judged.cost_estimate_method,
-        },
+        firecrawl_cost_payload(credits=7),
+        judged.cost_payload,
     )
     return {
         "provider": "firecrawl",
         "provider_mode": "firecrawl_search_plus_judge",
         "research_endpoint": "POST https://api.firecrawl.dev/v2/search",
-        "retrieved_contexts": [c.get("context", c.get("snippet", "")) for c in citations],
+        "retrieved_contexts": evidence_contexts(citations),
         "response": {
             "verdict": sanitize_verdict(judged.structured.get("verdict")),
             "summary": judged.structured.get("summary"),
@@ -1186,7 +1465,10 @@ def run_parallel_task_run(claim: BenchmarkClaim, api_key: str) -> dict[str, Any]
             "input": build_research_prompt(claim.claim),
             "processor": "base",
             "task_spec": {
-                "output_schema": PARALLEL_STRUCTURED_VERDICT_SCHEMA
+                "output_schema": {
+                    "type": "json",
+                    "json_schema": PARALLEL_STRUCTURED_VERDICT_SCHEMA,
+                }
             },
         },
         timeout=120,
@@ -1229,20 +1511,21 @@ def run_parallel_task_run(claim: BenchmarkClaim, api_key: str) -> dict[str, Any]
             "parallel",
             item.get("url") or f"parallel-basis-{index + 1}",
             title=item.get("title"),
-            snippet=item.get("snippet") or item.get("text") or item.get("title") or item.get("url") or f"Parallel basis {index + 1}",
-            context=item.get("text") or item.get("snippet") or item.get("title") or item.get("url") or f"Parallel basis {index + 1}",
+            snippet=first_text(item.get("snippet"), item.get("text"), item.get("title"), item.get("url"), f"Parallel basis {index + 1}"),
+            context=extract_nested_text(item) or first_text(item.get("snippet"), item.get("text"), item.get("title"), item.get("url"), f"Parallel basis {index + 1}"),
             rank=index + 1,
         )
         for index, item in enumerate(output.get("basis") or [])
         if isinstance(item, dict)
     ]
+    citations = enrich_citations_with_url_context(citations, max_fetches=5)
     structured = output.get("content") or {}
     latency_ms = int((time.time() - started) * 1000)
     return {
         "provider": "parallel",
         "provider_mode": "parallel_task_run",
         "research_endpoint": "POST/GET https://api.parallel.ai/v1/tasks/runs",
-        "retrieved_contexts": [c.get("context", c.get("snippet", "")) for c in citations],
+        "retrieved_contexts": evidence_contexts(citations),
         "response": {
             "verdict": sanitize_verdict(structured.get("verdict")),
             "summary": structured.get("summary"),
@@ -1252,7 +1535,7 @@ def run_parallel_task_run(claim: BenchmarkClaim, api_key: str) -> dict[str, Any]
         },
         "citations": citations,
         "latency_ms": latency_ms,
-        **estimate_parallel_base_task_cost(),
+        **parallel_cost_payload(),
         "status": "success",
     }
 
@@ -1268,6 +1551,8 @@ def run_provider_mode(
         return run_tavily_research(claim, keys["tavily"])
     if provider == "exa" and mode == "exa_search_structured":
         return run_exa_search_structured(claim, keys["exa"])
+    if provider == "exa" and mode == "exa_deep_research":
+        return run_exa_deep_research(claim, keys["exa"])
     if provider == "exa" and mode == "exa_research_async":
         return run_exa_research_async(claim, keys["exa"])
     if provider == "brave" and mode == "brave_context_plus_judge":
@@ -1310,6 +1595,11 @@ def make_artifact(
         "latency_ms": provider_payload.get("latency_ms", 0),
         "status": provider_payload.get("status", "success"),
         "error_type": provider_payload.get("error_type"),
+        "cost_units": provider_payload.get("cost_units"),
+        "cost_unit_name": provider_payload.get("cost_unit_name"),
+        "cost_unit_price": provider_payload.get("cost_unit_price"),
+        "cost_unit_price_low": provider_payload.get("cost_unit_price_low"),
+        "cost_unit_price_high": provider_payload.get("cost_unit_price_high"),
         "cost_estimate": provider_payload.get("cost_estimate"),
         "cost_estimate_low": provider_payload.get("cost_estimate_low"),
         "cost_estimate_high": provider_payload.get("cost_estimate_high"),
@@ -1372,6 +1662,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Stop immediately on the first provider failure.",
     )
+    parser.add_argument(
+        "--list-provider-modes",
+        action="store_true",
+        help="Print supported provider modes and detected key status, then exit.",
+    )
     return parser.parse_args()
 
 
@@ -1385,12 +1680,26 @@ def main() -> None:
     if args.max_claims > 0:
         claims = claims[: args.max_claims]
     keys = detect_api_keys()
+    if args.list_provider_modes:
+        print("Supported provider modes:")
+        for provider, modes in sorted(SUPPORTED_PROVIDER_MODES.items()):
+            key_state = mask_key(keys.get(provider, ""))
+            print(f"- {provider} key={key_state}")
+            for mode in sorted(modes):
+                suffix = f" (requires {args.judge_provider} judge key too)" if provider_mode_needs_judge(mode) else ""
+                print(f"  - {provider}:{mode}{suffix}")
+        print(f"- openai judge key={mask_key(keys.get('openai', ''))}")
+        print(f"- anthropic judge key={mask_key(keys.get('anthropic', ''))}")
+        return
+
     specs = provider_mode_specs(args.providers, keys, args.judge_provider)
     if not specs:
-        raise RuntimeError("No runnable provider modes were selected. Check your API keys and --providers list.")
-    if any(
-        mode in {"brave_context_plus_judge", "firecrawl_search_plus_judge"} for _, mode in specs
-    ) and not keys.get(args.judge_provider):
+        skipped = "\n".join(f"- {item}" for item in skipped_provider_modes(args.providers, keys, args.judge_provider))
+        raise RuntimeError(
+            "No runnable provider modes were selected. Check your API keys and --providers list."
+            + (f"\nSkipped:\n{skipped}" if skipped else "")
+        )
+    if any(provider_mode_needs_judge(mode) for _, mode in specs) and not keys.get(args.judge_provider):
         raise RuntimeError(
             f"{args.judge_provider.upper()}_API_KEY is required for the selected judge-based provider modes."
         )
@@ -1400,9 +1709,14 @@ def main() -> None:
     artifact_index = 1
 
     print(f"Loaded {len(claims)} benchmark claims from {dataset_path}")
+    skipped = skipped_provider_modes(args.providers, keys, args.judge_provider)
+    if skipped:
+        print("Skipped provider modes:")
+        for item in skipped:
+            print(f"- {item}")
     print("Running provider modes:")
     for provider, mode in specs:
-        print(f"- {provider}:{mode}")
+        print(f"- {provider}:{mode} key={mask_key(keys.get(provider, ''))}")
 
     for claim in claims:
         print(f"Claim {claim.id}: {claim.claim}")
@@ -1434,8 +1748,16 @@ def main() -> None:
 
     output_path.write_text(json.dumps(artifacts, indent=2))
     success_count = sum(1 for artifact in artifacts if artifact.get("status") == "success")
+    auth_error_count = sum(
+        1
+        for artifact in artifacts
+        if artifact.get("status") == "error"
+        and "[401]" in (((artifact.get("response") or {}).get("explanation")) or "")
+    )
     print(f"Wrote {len(artifacts)} artifacts to {output_path}")
     print(f"Successful runs: {success_count}/{len(artifacts)}")
+    if auth_error_count:
+        print(f"Authentication failures: {auth_error_count}. Check that those provider keys are current and belong to the right API product.", file=sys.stderr)
 
 
 if __name__ == "__main__":

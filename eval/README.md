@@ -39,14 +39,20 @@ python3 src/run_benchmark.py \
   --judge-provider openai
 ```
 
-The starter dataset currently contains 5 claims. For a 10-prompt run, create a
-JSONL file with 10 rows using the same fields as `datasets/benchmark_claims.jsonl`
-and pass it with `--dataset`.
+To see which provider modes are supported and which keys were detected:
+
+```bash
+python3 src/run_benchmark.py --list-provider-modes
+```
+
+The benchmark dataset currently contains 20 claims. You can create another JSONL
+file with the same fields as `datasets/benchmark_claims.jsonl` and pass it with
+`--dataset`.
 
 You can also limit the run while debugging:
 
 ```bash
-python3 src/run_benchmark.py --max-claims 2 --providers tavily:tavily_research exa:exa_search_structured
+python3 src/run_benchmark.py --max-claims 2 --providers tavily:tavily_research exa:exa_deep_research
 ```
 
 For a one-claim smoke run across all configured providers:
@@ -56,6 +62,77 @@ python3 src/run_benchmark.py \
   --dataset datasets/benchmark_claims.jsonl \
   --output-file results/live/all_provider_smoke.json \
   --max-claims 1 \
+  --judge-provider openai
+```
+
+## Provider Modes
+
+Implemented native research-style modes:
+
+- `tavily:tavily_research`: asks Tavily Research to generate the verdict/report directly.
+- `exa:exa_search_structured`: asks Exa search with `outputSchema` to generate structured verdict output directly.
+- `exa:exa_deep_research`: asks Exa deep-reasoning search to generate structured verdict output directly.
+- `parallel:parallel_task_run`: asks Parallel to run the research task and return structured output directly.
+- `brave:brave_answers_native`: Brave Answers API, when available for the account.
+
+Implemented retrieval-plus-judge modes:
+
+- `brave:brave_context_plus_judge`: Brave LLM Context returns grounded context/sources, so OpenAI judges the claim from that evidence.
+- `firecrawl:firecrawl_search_plus_judge`: Firecrawl returns search/scraped content, so OpenAI judges the claim from that evidence.
+
+Legacy mode:
+
+- `exa:exa_research_async`: Exa `/research/v1`; kept for old artifacts, but Exa docs now point users to `/search` with `type=deep-reasoning`.
+
+Good next candidates for comparable research endpoints:
+
+- OpenAI Responses API with `o3-deep-research` or `o4-mini-deep-research` plus `web_search`.
+- Perplexity Sonar/Sonar Pro for cited web-grounded answers.
+- Google Gemini with Grounding with Google Search.
+
+For a fair comparison, keep native research agents separate from
+retrieval-plus-judge modes in reporting. They have different cost, latency, and
+failure surfaces.
+
+## Cost Inputs
+
+The benchmark records provider unit prices directly in each artifact and uses
+those fields for cost breakdown charts. Current pricing inputs:
+
+- Tavily: $0.008 per credit.
+- Firecrawl Standard: $83/month for 100,000 credits, or $0.00083 per credit.
+- Exa Deep Search: $12-$15 per 1,000 requests.
+- Parallel: $0.005-$2.40 per request.
+- Brave Search: $5 per 1,000 requests.
+- Brave Answers: $4 per 1,000 requests plus $5 per million input/output tokens.
+- OpenAI GPT-5.5 judge: $5 per million input tokens, $0.50 per million cached input tokens, and $30 per million output tokens.
+
+## Debugging 401s
+
+`401` means the provider rejected the API key for that product. Common causes:
+
+- The key is missing, expired, pasted with quotes/comments, or from a different account.
+- The account has a key for search but not for a gated research/answers product.
+- The `.env` name does not match what the runner expects.
+
+Expected key names:
+
+- `TAVILY_API_KEY` or `tavily`
+- `EXA_API_KEY` or `exa`
+- `BRAVE_API_KEY` or `brave`
+- `FIRECRAWL_API_KEY` or `firecrawl`
+- `PARALLEL_API_KEY` or `parallel`
+- `OPENAI_API_KEY` or `openai`
+- `ANTHROPIC_API_KEY` or `anthropic`
+
+Run a one-claim smoke test before a full Ragas run:
+
+```bash
+python3 src/run_benchmark.py \
+  --dataset datasets/benchmark_claims.jsonl \
+  --output-file results/live/auth_smoke.json \
+  --max-claims 1 \
+  --providers tavily:tavily_research exa:exa_deep_research parallel:parallel_task_run \
   --judge-provider openai
 ```
 
@@ -122,7 +199,7 @@ Open `notebooks/results_overview.ipynb` after generating the summary files. The 
 
 - provider coverage and failure rate
 - latency distributions
-- cost estimates
+- unit pricing and total cost breakdowns
 - mean Ragas metric bars
 - metric spread boxplots
 - verdict confusion heatmap
