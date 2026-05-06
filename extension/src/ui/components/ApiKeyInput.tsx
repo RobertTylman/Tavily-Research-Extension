@@ -19,6 +19,7 @@ import {
   TavilyResearchModel,
 } from '../../lib/types';
 import { MAX_CLAIMS_MAX, MAX_CLAIMS_MIN, sendToBackground, storage } from '../../utils/messaging';
+import { ErrorLogEntry, formatErrorLog } from '../../utils/errorLog';
 import { Icons } from '../icons';
 
 interface ApiKeyInputProps {
@@ -35,6 +36,11 @@ const defaultSettings: ResearchSettings = {
 };
 
 export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInputProps) {
+  const appVersion = chrome.runtime.getManifest().version;
+  const [errorLogState, setErrorLogState] = useState<'idle' | 'copied' | 'empty' | 'error'>(
+    'idle'
+  );
+
   // Tavily key — single inline field. Shows the stored key (masked) and lets
   // the user paste a new one to replace it. The Save button only appears
   // once the value has actually changed.
@@ -129,6 +135,32 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
 
   const providerLabel = (provider: LLMProvider) =>
     provider === 'anthropic' ? 'Anthropic' : 'OpenAI';
+
+  const handleCopyErrorLog = async () => {
+    try {
+      const response = await sendToBackground<{ entries: ErrorLogEntry[] }>({
+        type: 'GET_ERROR_LOG',
+      });
+      const text = formatErrorLog(response.entries);
+      await navigator.clipboard.writeText(text);
+      setErrorLogState(response.entries.length === 0 ? 'empty' : 'copied');
+    } catch (error) {
+      console.error('Failed to copy error log:', error);
+      setErrorLogState('error');
+    }
+    window.setTimeout(() => setErrorLogState('idle'), 1800);
+  };
+
+  const handleClearErrorLog = async () => {
+    try {
+      await sendToBackground({ type: 'CLEAR_ERROR_LOG' });
+      setErrorLogState('empty');
+    } catch (error) {
+      console.error('Failed to clear error log:', error);
+      setErrorLogState('error');
+    }
+    window.setTimeout(() => setErrorLogState('idle'), 1800);
+  };
 
   return (
     <div className="api-key-section">
@@ -355,14 +387,43 @@ export function ApiKeyInput({ onSaveApiKey, onSaveResearchSettings }: ApiKeyInpu
 
       <div
         style={{
-          textAlign: 'right',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '12px',
           marginTop: '12px',
           marginRight: '-8px',
+          marginLeft: '-8px',
           marginBottom: '-8px',
           fontSize: '11px',
           color: 'var(--text-secondary, #808080)',
         }}
       >
+        <div className="settings-footer-left">
+          <span>Version {appVersion}</span>
+          <button
+            type="button"
+            className="settings-footer-button"
+            onClick={handleCopyErrorLog}
+            title="Copy recent extension error log"
+          >
+            {errorLogState === 'copied'
+              ? 'Copied'
+              : errorLogState === 'empty'
+                ? 'No errors'
+                : errorLogState === 'error'
+                  ? 'Failed'
+                  : 'Copy error log'}
+          </button>
+          <button
+            type="button"
+            className="settings-footer-button"
+            onClick={handleClearErrorLog}
+            title="Clear stored error log"
+          >
+            Clear
+          </button>
+        </div>
         <a
           href="https://roberttylman.github.io/portfolio-site/"
           target="_blank"

@@ -218,6 +218,7 @@ export interface PageFactCheckProgress {
  */
 export type ExtensionMessage =
   | { type: 'VERIFY_TEXT'; text: string }
+  | { type: 'CANCEL_VERIFY_TEXT' }
   | { type: 'VERIFY_SELECTED_TEXT' }
   | { type: 'GET_SELECTED_TEXT' }
   | { type: 'SELECTED_TEXT_RESPONSE'; text: string | null }
@@ -234,9 +235,13 @@ export type ExtensionMessage =
   | { type: 'SET_RESEARCH_SETTINGS'; settings: ResearchSettings }
   | { type: 'SET_LLM_API_KEY'; provider: LLMProvider; apiKey: string }
   | { type: 'GET_LLM_API_KEY_STATUS' }
+  | { type: 'GET_ERROR_LOG' }
+  | { type: 'CLEAR_ERROR_LOG' }
   | { type: 'FACT_CHECK_PAGE' }
+  | { type: 'CANCEL_FACT_CHECK_PAGE' }
   | { type: 'FACT_CHECK_PAGE_PROGRESS'; progress: PageFactCheckProgress }
   | { type: 'FACT_CHECK_PAGE_CLAIMS'; claims: PageClaim[] }
+  | { type: 'FACT_CHECK_PAGE_CLAIM_STATUS'; claimId: string; status: ResearchStatus }
   | { type: 'FACT_CHECK_PAGE_VERDICT'; claim: PageClaim; verdict: Verdict }
   | { type: 'FACT_CHECK_PAGE_DONE' }
   | { type: 'FACT_CHECK_PAGE_ERROR'; error: string }

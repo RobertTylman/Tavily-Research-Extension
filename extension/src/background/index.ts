@@ -22,17 +22,29 @@ import {
 } from '../utils/rateLimiter';
 import { storage } from '../utils/messaging';
 import { getCachedVerdict, cacheVerification } from '../utils/cache';
-import { Claim, ExtensionMessage, PageClaim, PageFactCheckProgress, Verdict } from '../lib/types';
+import { appendErrorLog, clearErrorLog, formatUnknownError, getErrorLog } from '../utils/errorLog';
+import {
+  Claim,
+  ExtensionMessage,
+  PageClaim,
+  PageFactCheckProgress,
+  ResearchStatus,
+  Verdict,
+} from '../lib/types';
 
 // ============================================================================
 // MESSAGE HANDLING
 // ============================================================================
+
+let activeTextResearchController: AbortController | null = null;
+let activePageFactCheckController: AbortController | null = null;
 
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
   handleMessage(message, sender)
     .then(sendResponse)
     .catch((error) => {
       console.error('Background worker error:', error);
+      void logBackgroundError('Background worker error', error);
       sendResponse({ error: error.message });
     });
 
@@ -46,6 +58,11 @@ async function handleMessage(
   switch (message.type) {
     case 'VERIFY_TEXT':
       return await verifyText(message.text);
+
+    case 'CANCEL_VERIFY_TEXT':
+      activeTextResearchController?.abort();
+      activeTextResearchController = null;
+      return { cancelled: true };
 
     case 'SET_API_KEY':
       await storage.setApiKey(message.apiKey);
@@ -74,10 +91,24 @@ async function handleMessage(
       return { status };
     }
 
+    case 'GET_ERROR_LOG': {
+      const entries = await getErrorLog();
+      return { entries };
+    }
+
+    case 'CLEAR_ERROR_LOG':
+      await clearErrorLog();
+      return { success: true };
+
     case 'FACT_CHECK_PAGE':
       // Kick off in background — popup subscribes to broadcast events.
       void factCheckCurrentPage();
       return { started: true };
+
+    case 'CANCEL_FACT_CHECK_PAGE':
+      activePageFactCheckController?.abort();
+      activePageFactCheckController = null;
+      return { cancelled: true };
 
     default:
       return { error: 'Unknown message type' };
@@ -92,7 +123,12 @@ async function verifyText(text: string): Promise<{
   claims: Claim[];
   verdicts: Verdict[];
   error?: string;
+  cancelled?: boolean;
 }> {
+  const controller = new AbortController();
+  activeTextResearchController?.abort();
+  activeTextResearchController = controller;
+
   try {
     await storage.resetCreditsUsed();
     await storage.resetLlmTokensUsed();
@@ -145,6 +181,7 @@ async function verifyText(text: string): Promise<{
         const verdict = await researchClaim(claim, apiKey, {
           model: researchSettings.model,
           citationFormat: researchSettings.citationFormat,
+          signal: controller.signal,
           onStatus: (status) => {
             chrome.runtime
               .sendMessage({
@@ -187,6 +224,7 @@ async function verifyText(text: string): Promise<{
             error.message,
             error.responseBody
           );
+          void logBackgroundError('Tavily research error', error, error.responseBody);
           const baseExplanation = error.isAuthError()
             ? 'API authentication failed. Please check your Tavily API key.'
             : error.isTimeout()
@@ -202,6 +240,12 @@ async function verifyText(text: string): Promise<{
             explanation: `${baseExplanation} ${detail}`,
             citations: [],
           });
+        } else if (isAbortError(error)) {
+          return {
+            claims: allClaims,
+            verdicts,
+            cancelled: true,
+          };
         } else {
           throw error;
         }
@@ -213,12 +257,25 @@ async function verifyText(text: string): Promise<{
       verdicts,
     };
   } catch (error) {
+    if (isAbortError(error)) {
+      return {
+        claims: [],
+        verdicts: [],
+        cancelled: true,
+      };
+    }
+
     console.error('[Background] Verification failed:', error);
+    void logBackgroundError('Verification failed', error);
     return {
       claims: [],
       verdicts: [],
       error: error instanceof Error ? error.message : 'Unknown error occurred',
     };
+  } finally {
+    if (activeTextResearchController === controller) {
+      activeTextResearchController = null;
+    }
   }
 }
 
@@ -275,6 +332,9 @@ const RESEARCH_CONCURRENCY = 3;
 
 async function factCheckCurrentPage(): Promise<void> {
   let activeTabId: number | undefined;
+  const controller = new AbortController();
+  activePageFactCheckController?.abort();
+  activePageFactCheckController = controller;
 
   try {
     await storage.resetCreditsUsed();
@@ -317,7 +377,7 @@ async function factCheckCurrentPage(): Promise<void> {
 
     let extracted: ExtractedPage;
     try {
-      extracted = await extractPage(tab.url, apiKey);
+      extracted = await extractPage(tab.url, apiKey, { signal: controller.signal });
     } catch (error) {
       console.warn(
         '[Background] Tavily extraction failed, falling back to local DOM extraction:',
@@ -349,6 +409,7 @@ async function factCheckCurrentPage(): Promise<void> {
       provider: settings.llmProvider,
       apiKey: llmKey,
       maxClaims: settings.maxClaimsPerPage,
+      signal: controller.signal,
       onUsage: (tokens) => {
         void storage.addLlmTokensUsed(tokens);
       },
@@ -374,8 +435,13 @@ async function factCheckCurrentPage(): Promise<void> {
     });
 
     let completed = 0;
-    await runWithConcurrency(claims, RESEARCH_CONCURRENCY, async (pageClaim) => {
-      const verdict = await researchSinglePageClaim(pageClaim, apiKey, settings);
+    await runWithConcurrency(claims, RESEARCH_CONCURRENCY, controller.signal, async (pageClaim) => {
+      const verdict = await researchSinglePageClaim(pageClaim, apiKey, settings, {
+        signal: controller.signal,
+        onStatus: (status) => {
+          broadcast({ type: 'FACT_CHECK_PAGE_CLAIM_STATUS', claimId: pageClaim.id, status });
+        },
+      });
       completed++;
 
       broadcast({ type: 'FACT_CHECK_PAGE_VERDICT', claim: pageClaim, verdict });
@@ -399,7 +465,12 @@ async function factCheckCurrentPage(): Promise<void> {
     });
     broadcast({ type: 'FACT_CHECK_PAGE_DONE' });
   } catch (error) {
+    if (isAbortError(error)) {
+      return;
+    }
+
     console.error('[Background] factCheckCurrentPage failed:', error);
+    void logBackgroundError('Page fact check failed', error);
     if (error instanceof TavilyError) {
       broadcastPageError(`Tavily error [${error.statusCode}]: ${error.message}`);
     } else if (error instanceof LLMError) {
@@ -407,13 +478,21 @@ async function factCheckCurrentPage(): Promise<void> {
     } else {
       broadcastPageError(error instanceof Error ? error.message : 'Unknown error.');
     }
+  } finally {
+    if (activePageFactCheckController === controller) {
+      activePageFactCheckController = null;
+    }
   }
 }
 
 async function researchSinglePageClaim(
   pageClaim: PageClaim,
   apiKey: string,
-  settings: Awaited<ReturnType<typeof storage.getResearchSettings>>
+  settings: Awaited<ReturnType<typeof storage.getResearchSettings>>,
+  options: {
+    signal?: AbortSignal;
+    onStatus?: (status: ResearchStatus) => void;
+  } = {}
 ): Promise<Verdict> {
   const claim: Claim = {
     id: pageClaim.id,
@@ -432,6 +511,8 @@ async function researchSinglePageClaim(
     const verdict = await researchClaim(claim, apiKey, {
       model: settings.model,
       citationFormat: settings.citationFormat,
+      signal: options.signal,
+      onStatus: options.onStatus,
     });
     recordRequest();
     void storage.addCreditsUsed(1);
@@ -446,6 +527,10 @@ async function researchSinglePageClaim(
     return verdict;
   } catch (error) {
     let explanation: string;
+    if (isAbortError(error)) {
+      throw error;
+    }
+
     if (error instanceof RateLimitError) {
       explanation = `Rate limited. Wait ${error.waitSeconds}s before re-running.`;
     } else if (error instanceof TavilyError) {
@@ -466,17 +551,25 @@ async function researchSinglePageClaim(
 async function runWithConcurrency<T>(
   items: T[],
   concurrency: number,
+  signal: AbortSignal | undefined,
   worker: (item: T) => Promise<void>
 ): Promise<void> {
   let cursor = 0;
   const runners: Promise<void>[] = [];
   const advance = async (): Promise<void> => {
     while (cursor < items.length) {
+      if (signal?.aborted) {
+        throw new DOMException('Page fact check aborted', 'AbortError');
+      }
       const idx = cursor++;
       try {
         await worker(items[idx]);
       } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
         console.error('[Background] research worker failed:', error);
+        void logBackgroundError('Page research worker failed', error);
       }
     }
   };
@@ -503,7 +596,22 @@ function broadcastPageError(error: string): void {
 function sendToTab(tabId: number, message: ExtensionMessage): Promise<any> {
   return chrome.tabs.sendMessage(tabId, message).catch((err) => {
     console.warn('[Background] sendToTab failed:', err);
+    void logBackgroundError('sendToTab failed', err);
     return null;
+  });
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof DOMException && error.name === 'AbortError'
+  ) || (error instanceof Error && error.name === 'AbortError');
+}
+
+function logBackgroundError(message: string, error: unknown, details?: string): Promise<void> {
+  return appendErrorLog({
+    source: 'background',
+    message,
+    details: [formatUnknownError(error), details].filter(Boolean).join('\n'),
   });
 }
 

@@ -626,6 +626,30 @@ select.api-key-input {
   line-height: 13px;
 }
 
+.settings-footer-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-footer-button {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  padding: 2px 6px;
+}
+
+.settings-footer-button:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+}
+
 .timeline-control {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);

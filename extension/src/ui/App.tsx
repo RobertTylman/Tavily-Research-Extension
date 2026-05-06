@@ -5,7 +5,7 @@
  * Manages the overall verification flow and state.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Claim,
   ExtensionMessage,
@@ -39,6 +39,7 @@ type Theme = 'light' | 'dark';
 interface PageCheckEntry {
   claim: PageClaim;
   verdict?: Verdict;
+  status?: ResearchStatus;
 }
 
 interface PageCheckState {
@@ -62,6 +63,8 @@ export default function App() {
   const [shareState, setShareState] = useState<'idle' | 'copied' | 'error'>('idle');
   const [pageCheck, setPageCheck] = useState<PageCheckState>(initialPageCheck);
   const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
+  const verificationRunRef = useRef(0);
+  const pageCheckActiveRef = useRef(false);
 
   const [tavilyCredits, setTavilyCredits] = useState<number>(0);
   const [llmTokens, setLlmTokens] = useState<number>(0);
@@ -116,6 +119,8 @@ export default function App() {
 
   const handleVerify = useCallback(
     async (text?: string) => {
+      const runId = verificationRunRef.current + 1;
+      verificationRunRef.current = runId;
       const textToVerify = text || inputText;
 
       if (!textToVerify.trim()) {
@@ -139,7 +144,12 @@ export default function App() {
           claims: Claim[];
           verdicts: Verdict[];
           error?: string;
+          cancelled?: boolean;
         }>({ type: 'VERIFY_TEXT', text: textToVerify });
+
+        if (verificationRunRef.current !== runId || response.cancelled) {
+          return;
+        }
 
         if (response.error) {
           setState({
@@ -159,6 +169,9 @@ export default function App() {
           verdicts: response.verdicts,
         });
       } catch (error) {
+        if (verificationRunRef.current !== runId) {
+          return;
+        }
         setState({
           status: 'error',
           progress: 0,
@@ -238,7 +251,10 @@ export default function App() {
         } = result.lastUiState;
 
         if (savedState) setState(savedState);
-        if (savedPageCheck) setPageCheck(savedPageCheck);
+        if (savedPageCheck) {
+          setPageCheck(savedPageCheck);
+          pageCheckActiveRef.current = savedPageCheck.status === 'running';
+        }
         if (savedInputText) setInputText(savedInputText);
         // Only restore settings view if we have an API key
         if (savedShowSettings !== undefined) setShowSettings(savedShowSettings);
@@ -305,9 +321,18 @@ export default function App() {
             entry.claim.id === message.claim.id ? { ...entry, verdict: message.verdict } : entry
           ),
         }));
+      } else if (message?.type === 'FACT_CHECK_PAGE_CLAIM_STATUS') {
+        setPageCheck((prev) => ({
+          ...prev,
+          entries: prev.entries.map((entry) =>
+            entry.claim.id === message.claimId ? { ...entry, status: message.status } : entry
+          ),
+        }));
       } else if (message?.type === 'FACT_CHECK_PAGE_DONE') {
+        pageCheckActiveRef.current = false;
         setPageCheck((prev) => ({ ...prev, status: 'complete' }));
       } else if (message?.type === 'FACT_CHECK_PAGE_ERROR') {
+        pageCheckActiveRef.current = false;
         setPageCheck((prev) => ({
           ...prev,
           status: 'error',
@@ -386,6 +411,7 @@ export default function App() {
    * Reset to initial state
    */
   const handleReset = () => {
+    verificationRunRef.current += 1;
     setState(initialState);
     setInputText('');
     setLatestStatus(null);
@@ -394,10 +420,22 @@ export default function App() {
     void storage.resetLlmTokensUsed();
   };
 
+  const handleCancelVerify = async () => {
+    verificationRunRef.current += 1;
+    setState(initialState);
+    setLatestStatus(null);
+    try {
+      await sendToBackground({ type: 'CANCEL_VERIFY_TEXT' });
+    } catch (error) {
+      console.log('Could not cancel text verification:', error);
+    }
+  };
+
   /**
    * Kick off the page-fact-checker pipeline in the background worker.
    */
   const handleFactCheckPage = async () => {
+    pageCheckActiveRef.current = true;
     setPageCheck({
       status: 'running',
       entries: [],
@@ -412,6 +450,7 @@ export default function App() {
         progress: undefined,
         error: error instanceof Error ? error.message : 'Failed to start page fact check.',
       });
+      pageCheckActiveRef.current = false;
     }
   };
 
@@ -420,6 +459,15 @@ export default function App() {
   };
 
   const handleClearPageCheck = async () => {
+    pageCheckActiveRef.current = false;
+    if (pageCheck.status === 'running') {
+      try {
+        await sendToBackground({ type: 'CANCEL_FACT_CHECK_PAGE' });
+      } catch (error) {
+        console.log('Could not cancel page fact check:', error);
+      }
+    }
+
     try {
       await sendToContentScript({ type: 'CLEAR_ANNOTATIONS' });
     } catch (error) {
@@ -639,7 +687,7 @@ export default function App() {
                           </div>
                         ) : (
                           <div className="page-claim-meta page-claim-meta--pending">
-                            Researching…
+                            {compactResearchStatus(entry.status)}
                           </div>
                         )}
                       </div>
@@ -707,6 +755,9 @@ export default function App() {
             {latestStatus?.message ?? 'Preparing research request…'}
           </p>
           <p className="loading-elapsed">{displayElapsed}s elapsed</p>
+          <button className="new-check-button" onClick={handleCancelVerify}>
+            Cancel
+          </button>
         </div>
       )}
 
@@ -762,6 +813,27 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function compactResearchStatus(status?: ResearchStatus | null): string {
+  if (!status) {
+    return 'Researching...';
+  }
+
+  switch (status.stage) {
+    case 'submitting':
+      return 'Starting...';
+    case 'searching':
+      return 'Searching sources...';
+    case 'analyzing':
+      return 'Reading sources...';
+    case 'synthesizing':
+      return 'Weighing evidence...';
+    case 'finalizing':
+      return 'Finalizing...';
+    default:
+      return 'Researching...';
+  }
 }
 
 function formatShareText(claims: Claim[], verdicts: Verdict[]): string {
