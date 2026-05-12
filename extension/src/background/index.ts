@@ -23,6 +23,7 @@ import {
 import { storage } from '../utils/messaging';
 import { getCachedVerdict, cacheVerification } from '../utils/cache';
 import { appendErrorLog, clearErrorLog, formatUnknownError, getErrorLog } from '../utils/errorLog';
+import { LangSmithRun, startLangSmithRun, summarizeText, summarizeUrl } from '../lib/langsmith';
 import {
   Claim,
   ExtensionMessage,
@@ -128,6 +129,40 @@ async function verifyText(text: string): Promise<{
   const controller = new AbortController();
   activeTextResearchController?.abort();
   activeTextResearchController = controller;
+  const trace = await startLangSmithRun({
+    name: 'verify_text',
+    runType: 'chain',
+    inputs: {
+      text: summarizeText(text),
+    },
+    metadata: {
+      entrypoint: 'popup_or_selection',
+    },
+    tags: ['text-verification'],
+  });
+
+  const finish = async (result: {
+    claims: Claim[];
+    verdicts: Verdict[];
+    error?: string;
+    cancelled?: boolean;
+  }) => {
+    await trace?.end({
+      outputs: {
+        claims_count: result.claims.length,
+        verdicts_count: result.verdicts.length,
+        verdicts: result.verdicts.map((verdict) => verdict.verdict),
+        cancelled: Boolean(result.cancelled),
+        errored: Boolean(result.error),
+      },
+      metadata: {
+        confidence_values: result.verdicts.map((verdict) => verdict.confidence),
+        citation_counts: result.verdicts.map((verdict) => verdict.citations.length),
+      },
+      error: result.error,
+    });
+    return result;
+  };
 
   try {
     await storage.resetCreditsUsed();
@@ -135,20 +170,20 @@ async function verifyText(text: string): Promise<{
 
     const apiKey = await storage.getApiKey();
     if (!apiKey) {
-      return {
+      return await finish({
         claims: [],
         verdicts: [],
         error: 'No API key configured. Please add your Tavily API key in settings.',
-      };
+      });
     }
 
     const trimmed = text.trim();
     if (trimmed.length === 0) {
-      return {
+      return await finish({
         claims: [],
         verdicts: [],
         error: 'Please enter some text to fact-check.',
-      };
+      });
     }
 
     const researchSettings = await storage.getResearchSettings();
@@ -182,6 +217,7 @@ async function verifyText(text: string): Promise<{
           model: researchSettings.model,
           citationFormat: researchSettings.citationFormat,
           signal: controller.signal,
+          trace,
           onStatus: (status) => {
             chrome.runtime
               .sendMessage({
@@ -241,37 +277,37 @@ async function verifyText(text: string): Promise<{
             citations: [],
           });
         } else if (isAbortError(error)) {
-          return {
+          return await finish({
             claims: allClaims,
             verdicts,
             cancelled: true,
-          };
+          });
         } else {
           throw error;
         }
       }
     }
 
-    return {
+    return await finish({
       claims: allClaims,
       verdicts,
-    };
+    });
   } catch (error) {
     if (isAbortError(error)) {
-      return {
+      return await finish({
         claims: [],
         verdicts: [],
         cancelled: true,
-      };
+      });
     }
 
     console.error('[Background] Verification failed:', error);
     void logBackgroundError('Verification failed', error);
-    return {
+    return await finish({
       claims: [],
       verdicts: [],
       error: error instanceof Error ? error.message : 'Unknown error occurred',
-    };
+    });
   } finally {
     if (activeTextResearchController === controller) {
       activeTextResearchController = null;
@@ -335,6 +371,7 @@ async function factCheckCurrentPage(): Promise<void> {
   const controller = new AbortController();
   activePageFactCheckController?.abort();
   activePageFactCheckController = controller;
+  let trace: LangSmithRun | null = null;
 
   try {
     await storage.resetCreditsUsed();
@@ -366,6 +403,20 @@ async function factCheckCurrentPage(): Promise<void> {
       broadcastPageError('The current page is not a public web page (only http/https supported).');
       return;
     }
+    trace = await startLangSmithRun({
+      name: 'fact_check_page',
+      runType: 'chain',
+      inputs: {
+        url: summarizeUrl(tab.url),
+      },
+      metadata: {
+        title: tab.title || '',
+        llm_provider: settings.llmProvider,
+        tavily_model: settings.model,
+        max_claims_per_page: settings.maxClaimsPerPage,
+      },
+      tags: ['page-fact-check'],
+    });
 
     // Clear any prior annotations before starting a new pass.
     sendToTab(activeTabId, { type: 'CLEAR_ANNOTATIONS' });
@@ -410,6 +461,7 @@ async function factCheckCurrentPage(): Promise<void> {
       apiKey: llmKey,
       maxClaims: settings.maxClaimsPerPage,
       signal: controller.signal,
+      trace,
       onUsage: (tokens) => {
         void storage.addLlmTokensUsed(tokens);
       },
@@ -421,6 +473,12 @@ async function factCheckCurrentPage(): Promise<void> {
         message: 'No check-worthy factual claims found on this page.',
         claimsTotal: 0,
         claimsCompleted: 0,
+      });
+      await trace?.end({
+        outputs: {
+          claims_count: 0,
+          verdicts_count: 0,
+        },
       });
       broadcast({ type: 'FACT_CHECK_PAGE_DONE' });
       return;
@@ -438,6 +496,7 @@ async function factCheckCurrentPage(): Promise<void> {
     await runWithConcurrency(claims, RESEARCH_CONCURRENCY, controller.signal, async (pageClaim) => {
       const verdict = await researchSinglePageClaim(pageClaim, apiKey, settings, {
         signal: controller.signal,
+        trace,
         onStatus: (status) => {
           broadcast({ type: 'FACT_CHECK_PAGE_CLAIM_STATUS', claimId: pageClaim.id, status });
         },
@@ -463,14 +522,26 @@ async function factCheckCurrentPage(): Promise<void> {
       claimsTotal: claims.length,
       claimsCompleted: claims.length,
     });
+    await trace?.end({
+      outputs: {
+        claims_count: claims.length,
+        claims_completed: claims.length,
+      },
+    });
     broadcast({ type: 'FACT_CHECK_PAGE_DONE' });
   } catch (error) {
     if (isAbortError(error)) {
+      await trace?.end({
+        outputs: {
+          cancelled: true,
+        },
+      });
       return;
     }
 
     console.error('[Background] factCheckCurrentPage failed:', error);
     void logBackgroundError('Page fact check failed', error);
+    await trace?.end({ error });
     if (error instanceof TavilyError) {
       broadcastPageError(`Tavily error [${error.statusCode}]: ${error.message}`);
     } else if (error instanceof LLMError) {
@@ -491,6 +562,7 @@ async function researchSinglePageClaim(
   settings: Awaited<ReturnType<typeof storage.getResearchSettings>>,
   options: {
     signal?: AbortSignal;
+    trace?: LangSmithRun | null;
     onStatus?: (status: ResearchStatus) => void;
   } = {}
 ): Promise<Verdict> {
@@ -512,6 +584,7 @@ async function researchSinglePageClaim(
       model: settings.model,
       citationFormat: settings.citationFormat,
       signal: options.signal,
+      trace: options.trace,
       onStatus: options.onStatus,
     });
     recordRequest();

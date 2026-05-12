@@ -152,6 +152,39 @@ npm run build
 The popup is now ready. Type or paste text and hit **Search**, or highlight
 text on any page and use the keyboard shortcut or context menu.
 
+### Optional LangSmith tracing
+
+Local/dev builds can send end-to-end fact-check traces to LangSmith. Tracing is
+off by default and only runs when the extension is built with LangSmith env vars:
+
+```bash
+# Put these in the repo-root .env file, then rebuild.
+VITE_LANGSMITH_TRACING=true
+VITE_LANGSMITH_API_KEY=lsv2_...
+VITE_LANGSMITH_PROJECT=fact-checker-dev
+VITE_LANGSMITH_SAMPLE_RATE=1
+npm run build
+```
+
+After rebuilding, reload the unpacked extension and run at least one fact-check.
+LangSmith creates or shows the project after it receives the first trace.
+
+The background worker emits one root trace per user action:
+
+- `verify_text` for pasted or selected text checks
+- `fact_check_page` for full-page checks
+
+Nested spans capture `extract_claims` LLM calls and `research_claim` Tavily
+research calls. Traces include operational metadata such as provider, model,
+claim counts, verdict labels, confidence values, citation counts, elapsed time,
+and error/cancelled state. Article and claim text are summarized before being
+sent so LangSmith receives length and a short preview rather than full page
+content.
+
+Do not publish a Chrome Web Store build with `VITE_LANGSMITH_API_KEY` embedded.
+For production monitoring, route trace events through a small backend/proxy that
+owns the LangSmith key.
+
 ## Development
 
 ```bash

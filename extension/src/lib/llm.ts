@@ -12,6 +12,7 @@
  */
 
 import { LLMProvider, PageClaim } from './types';
+import { LangSmithRun, startLangSmithRun, summarizeText } from './langsmith';
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
@@ -39,6 +40,7 @@ export interface ExtractClaimsOptions {
   maxClaims: number;
   signal?: AbortSignal;
   onUsage?: (tokens: number) => void;
+  trace?: LangSmithRun | null;
 }
 
 /**
@@ -48,16 +50,58 @@ export async function extractClaims(
   articleText: string,
   options: ExtractClaimsOptions
 ): Promise<PageClaim[]> {
+  let tokensUsed = 0;
+  const trace = await startLangSmithRun({
+    name: 'extract_claims',
+    runType: 'llm',
+    parent: options.trace,
+    inputs: {
+      provider: options.provider,
+      model: options.provider === 'anthropic' ? ANTHROPIC_MODEL : OPENAI_MODEL,
+      max_claims: options.maxClaims,
+      article: summarizeText(articleText),
+    },
+    metadata: {
+      provider: options.provider,
+      max_claims: options.maxClaims,
+    },
+    tags: ['claim-extraction', options.provider],
+  });
+
   const trimmed = truncateArticle(articleText);
   const prompt = buildPrompt(trimmed, options.maxClaims);
 
-  const raw =
-    options.provider === 'anthropic'
-      ? await callAnthropic(prompt, options)
-      : await callOpenAI(prompt, options);
+  try {
+    const instrumentedOptions: ExtractClaimsOptions = {
+      ...options,
+      onUsage: (tokens) => {
+        tokensUsed += tokens;
+        options.onUsage?.(tokens);
+      },
+    };
 
-  const parsed = parseLLMResponse(raw);
-  return normalizeClaims(parsed, articleText, options.maxClaims);
+    const raw =
+      options.provider === 'anthropic'
+        ? await callAnthropic(prompt, instrumentedOptions)
+        : await callOpenAI(prompt, instrumentedOptions);
+
+    const parsed = parseLLMResponse(raw);
+    const claims = normalizeClaims(parsed, articleText, options.maxClaims);
+    await trace?.end({
+      outputs: {
+        claims_count: claims.length,
+        tokens_used: tokensUsed,
+      },
+      metadata: {
+        provider: options.provider,
+        model: options.provider === 'anthropic' ? ANTHROPIC_MODEL : OPENAI_MODEL,
+      },
+    });
+    return claims;
+  } catch (error) {
+    await trace?.end({ error });
+    throw error;
+  }
 }
 
 // ============================================================================

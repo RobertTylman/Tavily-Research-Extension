@@ -26,6 +26,7 @@ import {
   Verdict,
   VerdictLabel,
 } from './types';
+import { LangSmithRun, startLangSmithRun, summarizeText } from './langsmith';
 
 const TAVILY_RESEARCH_URL = 'https://api.tavily.com/research';
 
@@ -95,6 +96,7 @@ export interface ResearchOptions {
   pollIntervalMs?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
+  trace?: LangSmithRun | null;
   /** Receives narrated progress events while the research task is in flight. */
   onStatus?: (status: ResearchStatus) => void;
 }
@@ -107,6 +109,23 @@ export async function researchClaim(
   apiKey: string,
   options: ResearchOptions = {}
 ): Promise<Verdict> {
+  const trace = await startLangSmithRun({
+    name: 'research_claim',
+    runType: 'chain',
+    parent: options.trace,
+    inputs: {
+      claim_id: claim.id,
+      claim: summarizeText(claim.text),
+      model: options.model || DEFAULT_MODEL,
+      citation_format: options.citationFormat || DEFAULT_CITATION_FORMAT,
+    },
+    metadata: {
+      model: options.model || DEFAULT_MODEL,
+      citation_format: options.citationFormat || DEFAULT_CITATION_FORMAT,
+    },
+    tags: ['tavily-research'],
+  });
+
   const start = Date.now();
   emitStatus(options, {
     stage: 'submitting',
@@ -114,23 +133,47 @@ export async function researchClaim(
     elapsedSeconds: 0,
   });
 
-  const submission = await submitResearch(claim, apiKey, options);
+  try {
+    const submission = await submitResearch(claim, apiKey, options);
 
-  emitStatus(options, {
-    stage: 'searching',
-    message: 'Research agent accepted — beginning multi-source search…',
-    elapsedSeconds: Math.round((Date.now() - start) / 1000),
-  });
+    emitStatus(options, {
+      stage: 'searching',
+      message: 'Research agent accepted — beginning multi-source search…',
+      elapsedSeconds: Math.round((Date.now() - start) / 1000),
+    });
 
-  const result = await waitForResearch(submission.request_id, apiKey, options, start);
+    const result = await waitForResearch(submission.request_id, apiKey, options, start);
 
-  emitStatus(options, {
-    stage: 'finalizing',
-    message: 'Verdict ready — assembling citations…',
-    elapsedSeconds: Math.round((Date.now() - start) / 1000),
-  });
+    emitStatus(options, {
+      stage: 'finalizing',
+      message: 'Verdict ready — assembling citations…',
+      elapsedSeconds: Math.round((Date.now() - start) / 1000),
+    });
 
-  return toVerdict(claim, result);
+    const verdict = toVerdict(claim, result);
+    await trace?.end({
+      outputs: {
+        request_id: result.request_id,
+        status: result.status,
+        verdict: verdict.verdict,
+        confidence: verdict.confidence,
+        citation_count: verdict.citations.length,
+        response_time_seconds: verdict.researchTimeSeconds ?? null,
+      },
+      metadata: {
+        elapsed_seconds: Math.round((Date.now() - start) / 1000),
+      },
+    });
+    return verdict;
+  } catch (error) {
+    await trace?.end({
+      error,
+      metadata: {
+        elapsed_seconds: Math.round((Date.now() - start) / 1000),
+      },
+    });
+    throw error;
+  }
 }
 
 /**

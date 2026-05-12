@@ -8,6 +8,8 @@
     "https://api.tavily.com/*",
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",
+    "https://api.smith.langchain.com/*",
+    "https://*.api.smith.langchain.com/*",
     "https://huggingface.co/*",
     "https://cdn.jsdelivr.net/*",
     "https://nominatim.openstreetmap.org/*",

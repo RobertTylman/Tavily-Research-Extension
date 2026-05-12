@@ -17,6 +17,7 @@ const __dirname = dirname(__filename);
 export default defineConfig({
   plugins: [react()],
   base: './', // Use relative paths for Chrome extension
+  envDir: resolve(__dirname, '..'),
   build: {
     outDir: 'dist',
     emptyOutDir: true,
