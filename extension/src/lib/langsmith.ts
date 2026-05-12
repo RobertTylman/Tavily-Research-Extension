@@ -1,4 +1,5 @@
 type LangSmithRunType = 'chain' | 'llm' | 'tool' | 'parser';
+type LangSmithTextMode = 'off' | 'preview' | 'full';
 
 type JsonValue =
   | string
@@ -30,11 +31,13 @@ interface LangSmithConfig {
   project: string;
   workspaceId?: string;
   sampleRate: number;
+  textMode: LangSmithTextMode;
 }
 
 const DEFAULT_ENDPOINT = 'https://api.smith.langchain.com';
 const DEFAULT_PROJECT = 'fact-checker';
 const MAX_TEXT_PREVIEW = 240;
+const MAX_TRACE_TEXT_PREVIEW = 4_000;
 
 const config: LangSmithConfig = {
   enabled: import.meta.env.VITE_LANGSMITH_TRACING === 'true',
@@ -43,6 +46,7 @@ const config: LangSmithConfig = {
   project: import.meta.env.VITE_LANGSMITH_PROJECT || DEFAULT_PROJECT,
   workspaceId: import.meta.env.VITE_LANGSMITH_WORKSPACE_ID || undefined,
   sampleRate: parseSampleRate(import.meta.env.VITE_LANGSMITH_SAMPLE_RATE),
+  textMode: parseTextMode(import.meta.env.VITE_LANGSMITH_TEXT_MODE),
 };
 const sampled = shouldSample();
 
@@ -128,6 +132,14 @@ export function summarizeText(text: string): Record<string, JsonValue> {
   };
 }
 
+export function traceText(text: string | undefined | null): JsonValue {
+  if (!text) return null;
+  if (config.textMode === 'off') return null;
+  if (config.textMode === 'full') return text;
+
+  return compactText(text, MAX_TRACE_TEXT_PREVIEW);
+}
+
 export function summarizeUrl(url: string): Record<string, JsonValue> {
   try {
     const parsed = new URL(url);
@@ -184,6 +196,20 @@ function parseSampleRate(value: string | undefined): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 1;
   return Math.max(0, Math.min(1, parsed));
+}
+
+function parseTextMode(value: string | undefined): LangSmithTextMode {
+  if (value === 'off' || value === 'preview' || value === 'full') {
+    return value;
+  }
+  return 'preview';
+}
+
+function compactText(text: string, maxLength: number): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength)}...`
+    : normalized;
 }
 
 function formatError(error: unknown): string {

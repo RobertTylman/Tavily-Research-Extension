@@ -163,6 +163,7 @@ VITE_LANGSMITH_TRACING=true
 VITE_LANGSMITH_API_KEY=lsv2_...
 VITE_LANGSMITH_PROJECT=fact-checker-dev
 VITE_LANGSMITH_SAMPLE_RATE=1
+VITE_LANGSMITH_TEXT_MODE=preview
 npm run build
 ```
 
@@ -177,9 +178,13 @@ The background worker emits one root trace per user action:
 Nested spans capture `extract_claims` LLM calls and `research_claim` Tavily
 research calls. Traces include operational metadata such as provider, model,
 claim counts, verdict labels, confidence values, citation counts, elapsed time,
-and error/cancelled state. Article and claim text are summarized before being
-sent so LangSmith receives length and a short preview rather than full page
-content.
+and error/cancelled state. `research_claim` outputs also include the claim text,
+summary, explanation, report, and citation snippets according to
+`VITE_LANGSMITH_TEXT_MODE`:
+
+- `preview` keeps text fields but truncates long values before tracing
+- `full` sends complete text fields to LangSmith
+- `off` suppresses traced text fields
 
 Do not publish a Chrome Web Store build with `VITE_LANGSMITH_API_KEY` embedded.
 For production monitoring, route trace events through a small backend/proxy that

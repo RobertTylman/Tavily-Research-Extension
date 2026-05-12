@@ -7,6 +7,7 @@ interface ImportMetaEnv {
   readonly VITE_LANGSMITH_PROJECT?: string;
   readonly VITE_LANGSMITH_WORKSPACE_ID?: string;
   readonly VITE_LANGSMITH_SAMPLE_RATE?: string;
+  readonly VITE_LANGSMITH_TEXT_MODE?: 'off' | 'preview' | 'full';
 }
 
 interface ImportMeta {

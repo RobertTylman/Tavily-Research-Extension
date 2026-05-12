@@ -26,7 +26,7 @@ import {
   Verdict,
   VerdictLabel,
 } from './types';
-import { LangSmithRun, startLangSmithRun, summarizeText } from './langsmith';
+import { LangSmithRun, startLangSmithRun, summarizeText, traceText } from './langsmith';
 
 const TAVILY_RESEARCH_URL = 'https://api.tavily.com/research';
 
@@ -155,9 +155,20 @@ export async function researchClaim(
       outputs: {
         request_id: result.request_id,
         status: result.status,
+        claim_text: traceText(claim.text),
         verdict: verdict.verdict,
         confidence: verdict.confidence,
+        summary: traceText(verdict.summary),
+        explanation: traceText(verdict.explanation),
+        report: traceText(verdict.report),
         citation_count: verdict.citations.length,
+        citations: verdict.citations.map((citation) => ({
+          title: citation.title || null,
+          source: citation.source,
+          url: citation.url,
+          snippet: traceText(citation.snippet),
+          published_date: citation.publishedDate || null,
+        })),
         response_time_seconds: verdict.researchTimeSeconds ?? null,
       },
       metadata: {
