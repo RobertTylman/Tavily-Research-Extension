@@ -50,8 +50,7 @@ the same normalized verdict contract.
 - **Rate limiting** — 10 requests/minute guardrail to protect API quota
 - **Local-only key storage** — your Tavily API key lives in
   `chrome.storage.local`, never leaves the browser
-- **Light/dark theme** — warm cream-and-peach light theme, deep navy dark
-  theme; toggleable in the header and persisted to `localStorage`
+- **Light/dark theme** — light theme, deep navy dark theme; toggleable in the header
 - **Share** — one-click copy of a plain-text summary of the result
 
 ## Verdict labels
