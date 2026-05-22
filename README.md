@@ -179,6 +179,13 @@ The current checked-in static evaluation outputs live under:
 
 ### Evaluation charts
 
+#### Source Usage And Quality
+
+Compares providers by cited source volume, unique URLs, domain diversity,
+repeat-source concentration, and a transparent source-quality heuristic.
+
+![Source Usage And Quality By Search API](eval/results/live/summary/plots/provider_source_quality_dashboard.png)
+
 #### Citation Count Distribution
 
 Shows how many cited sources each provider returned per benchmark run. This is
